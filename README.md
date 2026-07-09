@@ -1,6 +1,6 @@
-# Hare
+# MosaicMoE
 
-Hare is being refactored toward a single-GPU sparse MoE kernel design that focuses on block-structured / HB-N:M sparse expert computation. The revised direction removes the old padding-free motivation and emphasizes sparse format + kernel co-design for routed MoE workloads.
+MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that focuses on block-structured / HB-N:M sparse expert computation. The revised direction removes the old padding-free motivation and emphasizes sparse format + kernel co-design for routed MoE workloads.
 
 ## Revision Focus
 
@@ -14,7 +14,7 @@ Hare is being refactored toward a single-GPU sparse MoE kernel design that focus
 
 ### 1. Pruning
 
-- [ ] Build a Hare accuracy branch based on SlideSparse `accuracy_eval`.
+- [ ] Build MosaicMoE pruning and accuracy scripts under `evaluation`.
 - [ ] Add routed expert layer filtering, excluding attention, router, and shared expert layers.
 - [ ] Decouple Wanda / SparseGPT importance computation from mask generation.
 - [ ] Implement dense, 2:4, 4:6, 6:8, V:N:M, and HB-N:M masks.
@@ -24,13 +24,14 @@ Hare is being refactored toward a single-GPU sparse MoE kernel design that focus
 - [ ] Fix calibration set, random seed, sample count, and sequence length.
 - [ ] Add WikiText2 perplexity and `lm-eval` scripts.
 - [ ] Record actual sparsity, per-layer sparsity, and task accuracy automatically.
-- [ ] Run a small-model smoke test before Qwen 16B / 30B.
+- [ ] Run the full pipeline on the smallest model first before scaling to larger MoE models.
+- [ ] Evaluate Qwen1.5-MoE-A2.7B, DeepSeek-V2-Lite, Qwen3-30B-A3B-Instruct-2507, and Mixtral-8x7B.
 
 ### 3. Checkpoint
 
 - [ ] Export standard Hugging Face checkpoints with zeroed sparse weights.
 - [ ] Implement an HB-N:M format validator.
-- [ ] Implement a Hare packer for nonzero weights, metadata, and config files.
+- [ ] Implement a MosaicMoE packer for nonzero weights, metadata, and config files.
 - [ ] Add pack / unpack numerical consistency tests.
 
 ### 4. Kernel
@@ -43,7 +44,7 @@ Hare is being refactored toward a single-GPU sparse MoE kernel design that focus
 
 ### 5. Framework Integration
 
-- [ ] Define an independent Hare runtime API.
+- [ ] Define an independent MosaicMoE runtime API.
 - [ ] Integrate with the vLLM or SGLang fused MoE backend first.
 - [ ] Implement a packed checkpoint loader and backend selection option.
 - [ ] Compare against native Triton, DeepGEMM, CUTLASS, and FlashInfer MoE backends.
