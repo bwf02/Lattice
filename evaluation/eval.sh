@@ -4,6 +4,11 @@ set -euo pipefail
 
 # Stage 0: Fixed evaluation configuration.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Inherit the host environment (torch / CUDA etc.), then add extra deps on top.
+#   - `uv venv --system-site-packages`  : fast venv that reuses system torch (not reinstalled)
+#   - `pip install -r requirements.txt` : add only eval extras (lm-eval, modelscope, ...)
+#     (uv pip resolves very slowly against the internal PyPI mirror here, so plain pip
+#      is used for the dependency step; it hits the same index and installs in seconds.)
 VENV_DIR="/tmp/mosaicmoe-eval-venv"
 MODEL_ID="Qwen/Qwen1.5-MoE-A2.7B"
 MODEL_DIR="${ROOT_DIR}/models/Qwen1.5-MoE-A2.7B"
@@ -29,22 +34,28 @@ case "${MODE}" in
     ;;
 esac
 
-# Stage 1: Create an isolated environment under /tmp and install dependencies.
+# Fall back to a HuggingFace mirror for the `datasets` library (used by lm_eval to
+# fetch benchmark data) when huggingface.co is unreachable. Does not override an
+# explicit user setting. Model download itself uses ModelScope (Stage 2).
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+
+# Stage 1: Create a venv that inherits the host environment (torch etc.),
+# then install only the extra deps from requirements.txt on top of it.
 echo "[1/3] Preparing evaluation environment: ${VENV_DIR}"
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
-  python3 -m venv "${VENV_DIR}"
-fi
+uv venv "${VENV_DIR}" --clear --system-site-packages --python /usr/bin/python3
 
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install -r "${ROOT_DIR}/requirements.txt"
 
 # Stage 2: Download the model once and reuse the local checkpoint.
-echo "[2/3] Preparing model: ${MODEL_ID}"
+# Use ModelScope instead of HuggingFace Hub so it works in environments
+# where huggingface.co is unreachable.
+echo "[2/3] Preparing model (via ModelScope): ${MODEL_ID}"
 if [[ ! -f "${MODEL_DIR}/config.json" ]]; then
   mkdir -p "${MODEL_DIR}"
   python -c \
-    "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${MODEL_ID}', local_dir='${MODEL_DIR}')"
+    "from modelscope import snapshot_download; snapshot_download(model_id='${MODEL_ID}', local_dir='${MODEL_DIR}')"
 fi
 
 # Stage 3: Run a short smoke test or the complete benchmark suite.

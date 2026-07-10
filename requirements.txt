@@ -1,7 +1,7 @@
-torch>=2.9.0
-transformers>=4.57.0
-accelerate>=1.12.0
+# Evaluation dependencies.
+# The venv inherits the host environment (torch/CUDA etc.) via `uv venv --system-site-packages`,
+# so torch is NOT reinstalled here and the prebuilt CUDA build is preserved.
 lm-eval>=0.4.11
-datasets>=4.8.0
-bitsandbytes>=0.43.0
-huggingface-hub>=0.34.0
+# Model download backend: ModelScope is used instead of HuggingFace Hub so the
+# pipeline works in environments where huggingface.co is unreachable.
+modelscope>=1.10.0
