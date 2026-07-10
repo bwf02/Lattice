@@ -5,6 +5,13 @@ import torch.nn as nn
 from .sparsegpt import SparseGPT 
 from .layerwrapper import WrappedGPT
 from .data import get_loaders 
+from .hb_nm import (
+    HBNMConfig,
+    build_hb_nm_prune_mask,
+    find_routed_expert_linears,
+    magnitude_importance,
+    wanda_importance,
+)
 
 from .ablate import AblateGPT 
 
@@ -29,7 +36,22 @@ def find_layers(module, layers=[nn.Linear], name=''):
         ))
     return res
 
-def check_sparsity(model):
+def _hb_nm_config(args):
+    return HBNMConfig(
+        block_h=args.block_h,
+        block_w=args.block_w,
+        block_n=args.block_n,
+        block_m=args.block_m,
+    )
+
+
+def _find_prunable_layers(layer, hb_nm=False):
+    if hb_nm:
+        return find_routed_expert_linears(layer)
+    return find_layers(layer)
+
+
+def check_sparsity(model, routed_experts_only=False):
     use_cache = model.config.use_cache 
     model.config.use_cache = False 
 
@@ -38,21 +60,32 @@ def check_sparsity(model):
     total_params = 0
     for i in range(len(layers)):
         layer = layers[i]
-        subset = find_layers(layer)
+        subset = _find_prunable_layers(layer, hb_nm=routed_experts_only)
 
         sub_count = 0
         sub_params = 0
         for name in subset:
             W = subset[name].weight.data
-            count += (W==0).sum().item()
+            zeros = (W == 0).sum().item()
+            count += zeros
             total_params += W.numel()
 
-            sub_count += (W==0).sum().item()
+            sub_count += zeros
             sub_params += W.numel()
 
-        print(f"layer {i} sparsity {float(sub_count)/sub_params:.6f}")
+            if routed_experts_only:
+                print(
+                    f"layer {i} {name} sparsity "
+                    f"{float(zeros) / W.numel():.6f}"
+                )
+
+        if sub_params:
+            print(f"layer {i} sparsity {float(sub_count)/sub_params:.6f}")
 
     model.config.use_cache = use_cache 
+    if total_params == 0:
+        target = "routed expert linear layers" if routed_experts_only else "linear layers"
+        raise ValueError(f"No {target} were found for sparsity measurement")
     return float(count)/total_params 
 
 def prepare_calibration_input(model, dataloader, device):
@@ -111,15 +144,19 @@ def return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before):
 
 def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
     layers = model.model.layers 
+    hb_nm = args.sparsity_type == "hb_nm"
+    config = _hb_nm_config(args) if hb_nm else None
 
     for i in range(len(layers)):
         layer = layers[i]
-        subset = find_layers(layer)
+        subset = _find_prunable_layers(layer, hb_nm=hb_nm)
 
         for name in subset:
             W = subset[name].weight.data 
-            W_metric = torch.abs(W)
-            if prune_n != 0:
+            W_metric = magnitude_importance(W)
+            if hb_nm:
+                W_mask = build_hb_nm_prune_mask(W_metric, config)
+            elif prune_n != 0:
                 W_mask = (torch.zeros_like(W)==1)
                 for ii in range(W_metric.shape[1]):
                     if ii % prune_m == 0:
@@ -142,9 +179,11 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
         inps, outs, attention_mask, position_ids, position_embeddings = prepare_calibration_input(model, dataloader, device)
 
     layers = model.model.layers
+    hb_nm = args.sparsity_type == "hb_nm"
+    config = _hb_nm_config(args) if hb_nm else None
     for i in range(len(layers)):
         layer = layers[i]
-        subset = find_layers(layer)
+        subset = _find_prunable_layers(layer, hb_nm=hb_nm)
 
         if f"model.layers.{i}" in model.hf_device_map:   ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]
@@ -172,10 +211,14 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
 
         for name in subset:
             print(f"pruning layer {i} name {name}")
-            W_metric = torch.abs(subset[name].weight.data) * torch.sqrt(wrapped_layers[name].scaler_row.reshape((1,-1)))
+            W_metric = wanda_importance(
+                subset[name].weight.data, wrapped_layers[name].scaler_row
+            )
 
             W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
-            if prune_n != 0:
+            if hb_nm:
+                W_mask = build_hb_nm_prune_mask(W_metric, config)
+            elif prune_n != 0:
                 # structured n:m sparsity
                 for ii in range(W_metric.shape[1]):
                     if ii % prune_m == 0:

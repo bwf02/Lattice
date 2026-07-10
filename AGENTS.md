@@ -19,12 +19,29 @@ cd MosaicMoE
 git checkout mosaic_moe_dev_eval
 ```
 
+## Remote Validation Workflow
+
+Use this sequence for implementation and validation:
+
+1. Modify and run static checks in the local repository.
+2. Review the local diff, then commit and push after explicit approval.
+3. Connect to the current SSH port provided by the user; the port may change.
+4. Update `/ossfs/workspace/MosaicMoE` with `git pull --ff-only`.
+5. Run unit tests and model smoke tests in the remote GPU environment.
+
+```bash
+ssh -p <current-port> 127.0.0.1
+cd /ossfs/workspace/MosaicMoE
+git pull --ff-only origin mosaic_moe_dev_eval
+```
+
 ## Evaluation Usage
 
 Install the evaluation dependencies from the repository root:
 
 ```bash
-python -m venv /tmp/mosaicmoe-eval-venv
+uv venv /tmp/mosaicmoe-eval-venv \
+  --clear --system-site-packages --python /usr/bin/python3
 source /tmp/mosaicmoe-eval-venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -54,6 +71,28 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
   --prune_n 2 --prune_m 8 \
   --save /path/to/results/wanda_6_8 \
   --save_model /path/to/checkpoints/wanda_6_8
+```
+
+Run HB-N:M Wanda pruning on Qwen1.5-MoE routed experts. `block_n:block_m`
+controls inter-block retention, while each retained block uses intra-block 2:4:
+
+```bash
+cd evaluation/wanda
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --prune_method wanda \
+  --sparsity_type hb_nm \
+  --block_h 16 --block_w 16 \
+  --block_n 1 --block_m 2 \
+  --nsamples 16 \
+  --save /path/to/results/hb_nm \
+  --save_model /path/to/checkpoints/hb_nm
+```
+
+Run the HB-N:M unit tests from the repository root:
+
+```bash
+python -m unittest discover -s evaluation/tests -v
 ```
 
 Run SparseGPT from its own directory:
