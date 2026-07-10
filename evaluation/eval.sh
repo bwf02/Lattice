@@ -42,7 +42,13 @@ export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 # Stage 1: Create a venv that inherits the host environment (torch etc.),
 # then install only the extra deps from requirements.txt on top of it.
 echo "[1/3] Preparing evaluation environment: ${VENV_DIR}"
-uv venv "${VENV_DIR}" --clear --system-site-packages --python /usr/bin/python3
+if ! command -v uv >/dev/null 2>&1; then
+  python3 -m pip install uv
+fi
+
+if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+  uv venv "${VENV_DIR}" --system-site-packages --python /usr/bin/python3
+fi
 
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
