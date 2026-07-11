@@ -88,7 +88,7 @@ def check_sparsity(model, routed_experts_only=False):
         raise ValueError(f"No {target} were found for sparsity measurement")
     return float(count)/total_params 
 
-def prepare_calibration_input(model, dataloader, device):
+def prepare_calibration_input(model, dataloader, device, nsamples):
     use_cache = model.config.use_cache
     model.config.use_cache = False
     layers = model.model.layers
@@ -98,7 +98,11 @@ def prepare_calibration_input(model, dataloader, device):
         device = model.hf_device_map["model.embed_tokens"]
 
     dtype = next(iter(model.parameters())).dtype
-    inps = torch.zeros((128, model.seqlen, model.config.hidden_size), dtype=dtype, device=device)
+    inps = torch.zeros(
+        (nsamples, model.seqlen, model.config.hidden_size),
+        dtype=dtype,
+        device=device,
+    )
     inps.requires_grad = False
     cache = {'i': 0, 'attention_mask': None, "position_ids": None, "position_embeddings": None}
 
@@ -176,7 +180,11 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
     dataloader, _ = get_loaders("wikitext2",nsamples=args.nsamples,seed=args.seed,seqlen=model.seqlen,tokenizer=tokenizer)
     print("dataset loading complete")
     with torch.no_grad():
-        inps, outs, attention_mask, position_ids, position_embeddings = prepare_calibration_input(model, dataloader, device)
+        inps, outs, attention_mask, position_ids, position_embeddings = (
+            prepare_calibration_input(
+                model, dataloader, device, nsamples=args.nsamples
+            )
+        )
 
     layers = model.model.layers
     hb_nm = args.sparsity_type == "hb_nm"
