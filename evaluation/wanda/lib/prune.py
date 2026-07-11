@@ -51,6 +51,10 @@ def _find_prunable_layers(layer, hb_nm=False):
     return find_layers(layer)
 
 
+def _routed_experts_only(args):
+    return args.sparsity_type == "hb_nm" or args.routed_experts_only
+
+
 def _move_to_device(value, device):
     if value is None:
         return None
@@ -159,7 +163,9 @@ def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune
 
     for i in range(len(layers)):
         layer = layers[i]
-        subset = _find_prunable_layers(layer, hb_nm=hb_nm)
+        subset = _find_prunable_layers(
+            layer, hb_nm=_routed_experts_only(args)
+        )
 
         for name in subset:
             W = subset[name].weight.data 
@@ -197,7 +203,9 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
     config = _hb_nm_config(args) if hb_nm else None
     for i in range(len(layers)):
         layer = layers[i]
-        subset = _find_prunable_layers(layer, hb_nm=hb_nm)
+        subset = _find_prunable_layers(
+            layer, hb_nm=_routed_experts_only(args)
+        )
 
         if f"model.layers.{i}" in model.hf_device_map:   ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]

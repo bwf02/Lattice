@@ -20,7 +20,7 @@ from lib.hb_nm import (  # noqa: E402
     validate_qwen2_moe_layout,
     wanda_importance,
 )
-from lib.prune import _move_to_device  # noqa: E402
+from lib.prune import _move_to_device, _routed_experts_only  # noqa: E402
 
 
 def _mask_as_blocks(mask, config):
@@ -42,6 +42,18 @@ class TestHBNMMask(unittest.TestCase):
         tensor = torch.ones(2)
         self.assertIsNone(_move_to_device(None, torch.device("cpu")))
         self.assertIs(_move_to_device(tensor, torch.device("cpu")), tensor)
+
+    def test_routed_expert_scope_supports_legacy_nm(self):
+        self.assertTrue(
+            _routed_experts_only(
+                SimpleNamespace(sparsity_type="2:8", routed_experts_only=True)
+            )
+        )
+        self.assertFalse(
+            _routed_experts_only(
+                SimpleNamespace(sparsity_type="2:8", routed_experts_only=False)
+            )
+        )
 
     def assert_hb_nm_constraints(self, importance, config):
         prune_mask = build_hb_nm_prune_mask(importance, config)

@@ -46,6 +46,11 @@ def main():
     parser.add_argument("--block_w", type=int, default=16, help="HB-N:M block width")
     parser.add_argument("--block_n", type=int, default=1, help="Blocks kept per HB-N:M group")
     parser.add_argument("--block_m", type=int, default=2, help="Blocks per HB-N:M group")
+    parser.add_argument(
+        "--routed_experts_only",
+        action="store_true",
+        help="Restrict legacy N:M pruning to routed MoE expert projections",
+    )
     parser.add_argument("--eval_zero_shot", action="store_true")
     args = parser.parse_args()
 
@@ -82,11 +87,14 @@ def main():
             prune_m = args.prune_m
         args.sparsity_ratio = prune_n / prune_m
 
+    if args.routed_experts_only and args.prune_method not in {"magnitude", "wanda"}:
+        parser.error("--routed_experts_only only supports magnitude and wanda")
+
     model_name = args.model.split("/")[-1]
     print(f"loading llm model {args.model}")
     model = get_llm(args.model, args.cache_dir)
     model.eval()
-    if args.sparsity_type == "hb_nm":
+    if args.sparsity_type == "hb_nm" or args.routed_experts_only:
         validate_qwen2_moe_layout(model)
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
 
@@ -109,7 +117,10 @@ def main():
     ################################################################
     print("*"*30)
     sparsity_ratio = check_sparsity(
-        model, routed_experts_only=args.sparsity_type == "hb_nm"
+        model,
+        routed_experts_only=(
+            args.sparsity_type == "hb_nm" or args.routed_experts_only
+        ),
     )
     print(f"sparsity sanity check {sparsity_ratio:.4f}")
     print("*"*30)
