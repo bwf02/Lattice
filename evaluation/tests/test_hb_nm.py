@@ -20,6 +20,7 @@ from lib.hb_nm import (  # noqa: E402
     validate_qwen2_moe_layout,
     wanda_importance,
 )
+from lib.prune import _move_to_device  # noqa: E402
 
 
 def _mask_as_blocks(mask, config):
@@ -37,6 +38,11 @@ def _mask_as_blocks(mask, config):
 
 
 class TestHBNMMask(unittest.TestCase):
+    def test_optional_calibration_tensor_device_move(self):
+        tensor = torch.ones(2)
+        self.assertIsNone(_move_to_device(None, torch.device("cpu")))
+        self.assertIs(_move_to_device(tensor, torch.device("cpu")), tensor)
+
     def assert_hb_nm_constraints(self, importance, config):
         prune_mask = build_hb_nm_prune_mask(importance, config)
         keep_blocks = ~_mask_as_blocks(prune_mask, config)

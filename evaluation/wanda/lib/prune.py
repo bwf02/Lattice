@@ -51,6 +51,12 @@ def _find_prunable_layers(layer, hb_nm=False):
     return find_layers(layer)
 
 
+def _move_to_device(value, device):
+    if value is None:
+        return None
+    return value.to(device)
+
+
 def check_sparsity(model, routed_experts_only=False):
     use_cache = model.config.use_cache 
     model.config.use_cache = False 
@@ -195,7 +201,9 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
 
         if f"model.layers.{i}" in model.hf_device_map:   ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]
-            inps, outs, attention_mask, position_ids = inps.to(dev), outs.to(dev), attention_mask.to(dev), position_ids.to(dev)
+            inps, outs = inps.to(dev), outs.to(dev)
+            attention_mask = _move_to_device(attention_mask, dev)
+            position_ids = _move_to_device(position_ids, dev)
             if position_embeddings is not None:
                 position_embeddings = tuple(pe.to(dev) for pe in position_embeddings)
 
@@ -325,7 +333,9 @@ def prune_sparsegpt(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         if f"model.layers.{i}" in model.hf_device_map:
             dev = model.hf_device_map[f"model.layers.{i}"]
             print(f"layer {i} device {dev}")
-            inps, outs, attention_mask, position_ids = inps.to(dev), outs.to(dev), attention_mask.to(dev), position_ids.to(dev)
+            inps, outs = inps.to(dev), outs.to(dev)
+            attention_mask = _move_to_device(attention_mask, dev)
+            position_ids = _move_to_device(position_ids, dev)
             if position_embeddings is not None:
                 position_embeddings = tuple(pe.to(dev) for pe in position_embeddings)
 
@@ -424,7 +434,9 @@ def prune_ablate(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         if f"model.layers.{i}" in model.hf_device_map:
             dev = model.hf_device_map[f"model.layers.{i}"]
             print(f"layer {i} device {dev}")
-            inps, outs, attention_mask, position_ids = inps.to(dev), outs.to(dev), attention_mask.to(dev), position_ids.to(dev)
+            inps, outs = inps.to(dev), outs.to(dev)
+            attention_mask = _move_to_device(attention_mask, dev)
+            position_ids = _move_to_device(position_ids, dev)
             if position_embeddings is not None:
                 position_embeddings = tuple(pe.to(dev) for pe in position_embeddings)
 
