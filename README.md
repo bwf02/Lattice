@@ -12,6 +12,16 @@ MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that 
 
 ## Code Roadmap
 
+### 0. Project Structure
+
+- [ ] Keep sparse pattern definitions under `mosaic_moe/patterns`.
+- [ ] Keep pruning and accuracy evaluation under `evaluation` until the pipeline is stable.
+- [ ] Add packed weight and metadata conversion under `mosaic_moe/weight_convert`.
+- [ ] Use `third_party/SparseGEMM` as the external sparse kernel backend.
+- [ ] Keep `third_party/sglang` as an optional external SGLang checkout placeholder.
+- [ ] Put serving-framework integration work under `end2end/sglang`.
+- [ ] Keep temporary SGLang patches under `patches/sglang`.
+
 ### 1. Pruning
 
 - [ ] Build MosaicMoE pruning and accuracy scripts under `evaluation`.
@@ -36,15 +46,15 @@ MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that 
 
 ### 4. Kernel
 
-- [ ] Implement dense reference and HB-N:M grouped GEMM prototypes.
+- [ ] Implement dense reference and HB-N:M grouped GEMM prototypes through `third_party/SparseGEMM`.
 - [ ] Implement index-driven routed activation loading.
 - [ ] Implement gate-up, activation, and down computation stages.
 - [ ] Add hybrid warp specialization, TMA / `cp.async` pipelines, and autotuning.
 - [ ] Benchmark correctness, token distribution sensitivity, and expert load imbalance.
 
-### 5. Framework Integration
+### 5. End-to-End Integration
 
 - [ ] Define an independent MosaicMoE runtime API.
-- [ ] Integrate with the vLLM or SGLang fused MoE backend first.
+- [ ] Integrate with the SGLang fused MoE backend under `end2end/sglang`.
 - [ ] Implement a packed checkpoint loader and backend selection option.
-- [ ] Compare against native Triton, DeepGEMM, CUTLASS, and FlashInfer MoE backends.
+- [ ] Compare against native Triton, DeepGEMM, CUTLASS, FlashInfer, and SGLang MoE backends.

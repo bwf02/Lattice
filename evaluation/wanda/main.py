@@ -8,10 +8,10 @@ from importlib.metadata import version
 from lib.prune import prune_wanda, prune_magnitude, prune_sparsegpt, prune_ablate, check_sparsity, find_layers
 from lib.hb_nm import (
     HBNMConfig,
-    Selective2To4Config,
+    HybridBlockSparseConfig,
     validate_hb_nm_options,
     validate_qwen2_moe_layout,
-    validate_selective_2_4_options,
+    validate_hybrid_block_sparse_options,
 )
 from lib.eval import eval_ppl, eval_zero_shot
 
@@ -54,14 +54,14 @@ def main():
         "--block_n",
         type=int,
         default=1,
-        help="HB-N:M: blocks kept; selective_2_4: blocks sparsified per group",
+        help="HB-N:M: blocks kept; hybrid_block_sparse: blocks sparsified per group",
     )
     parser.add_argument("--block_m", type=int, default=2, help="Blocks per HB-N:M group")
     parser.add_argument(
-        "--selective_score",
+        "--hybrid_block_score",
         choices=["sum", "squared_sum", "max_row_squared"],
         default="sum",
-        help="Block loss used to select blocks for selective_2_4",
+        help="Block loss used to select blocks for hybrid_block_sparse",
     )
     parser.add_argument(
         "--routed_experts_only",
@@ -83,7 +83,6 @@ def main():
             block_w=args.block_w,
             block_n=args.block_n,
             block_m=args.block_m,
-            score_mode=args.selective_score,
         )
         try:
             validate_hb_nm_options(
@@ -95,15 +94,16 @@ def main():
         except ValueError as error:
             parser.error(str(error))
         args.sparsity_ratio = config.sparsity
-    elif args.sparsity_type == "selective_2_4":
-        config = Selective2To4Config(
+    elif args.sparsity_type == "hybrid_block_sparse":
+        config = HybridBlockSparseConfig(
             block_h=args.block_h,
             block_w=args.block_w,
             block_n=args.block_n,
             block_m=args.block_m,
+            score_mode=args.hybrid_block_score,
         )
         try:
-            validate_selective_2_4_options(
+            validate_hybrid_block_sparse_options(
                 config,
                 prune_method=args.prune_method,
                 prune_n=args.prune_n,
@@ -129,7 +129,7 @@ def main():
     print(f"loading llm model {args.model}")
     model = get_llm(args.model, args.cache_dir)
     model.eval()
-    if args.sparsity_type in {"hb_nm", "selective_2_4"} or args.routed_experts_only:
+    if args.sparsity_type in {"hb_nm", "hybrid_block_sparse"} or args.routed_experts_only:
         validate_qwen2_moe_layout(model)
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
 
@@ -154,7 +154,7 @@ def main():
     sparsity_ratio = check_sparsity(
         model,
         routed_experts_only=(
-            args.sparsity_type in {"hb_nm", "selective_2_4"}
+            args.sparsity_type in {"hb_nm", "hybrid_block_sparse"}
             or args.routed_experts_only
         ),
     )

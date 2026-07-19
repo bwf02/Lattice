@@ -74,8 +74,8 @@ if [[ "${MODE}" == "full" ]]; then
 else
   lm_eval --model hf \
     --model_args "pretrained=${MODEL_DIR},dtype=float16,trust_remote_code=True" \
-    --tasks piqa \
+    --tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande,boolq,openbookqa \
     --limit 16 \
     --batch_size 1 \
-    --output_path "${OUTPUT_DIR}/smoke"
+    --output_path "${OUTPUT_DIR}/smoke_commonsense"
 fi

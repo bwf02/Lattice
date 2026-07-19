@@ -1,0 +1,3 @@
+[submodule "third_party/SparseGEMM"]
+	path = third_party/SparseGEMM
+	url = git@github.com:bwf02/SparseGEMM.git

@@ -19,6 +19,47 @@ cd MosaicMoE
 git checkout mosaic_moe_dev_eval
 ```
 
+## Project Structure
+
+MosaicMoE is organized as an independent sparse MoE toolchain, not a fork of a
+serving framework.
+
+```text
+MosaicMoE/
+├── mosaic_moe/
+│   ├── patterns/        # Sparse pattern semantics and validators
+│   ├── pruning/         # Pruning frontends and HF checkpoint export
+│   ├── weight_convert/  # Sparse checkpoint to packed kernel artifacts
+│   ├── core/            # Framework-independent runtime abstractions
+│   ├── kernels/         # Thin wrappers around third-party kernel backends
+│   └── search/          # Pattern and kernel parameter search
+├── evaluation/          # Accuracy evaluation pipeline
+├── benchmarks/          # Kernel, layer, and serving benchmarks
+├── end2end/
+│   └── sglang/          # SGLang end-to-end integration experiments
+├── third_party/
+│   ├── SparseGEMM/      # External sparse GEMM kernel repository
+│   └── sglang/          # Optional external SGLang checkout placeholder
+├── patches/sglang/      # Temporary SGLang patches
+├── scripts/             # Utility entry points
+└── docs/                # Design and experiment notes
+```
+
+Do not place third-party source code directly under `mosaic_moe`. Kernel
+implementations live in `third_party/SparseGEMM`; `mosaic_moe/kernels` should
+only contain small Python wrappers, build/load helpers, dispatch code, and
+numerical correctness adapters used by MosaicMoE.
+
+The intended data flow is:
+
+```text
+pattern definition
+  -> pruning and zero-weight HF checkpoint
+  -> metadata and packed weight conversion
+  -> SparseGEMM kernel wrapper
+  -> end-to-end SGLang integration
+```
+
 ## Remote Validation Workflow
 
 Use this sequence for implementation and validation:
@@ -36,6 +77,15 @@ git pull --ff-only origin mosaic_moe_dev_eval
 ```
 
 ## Evaluation Usage
+
+Use two evaluation levels for pruning experiments:
+
+- Quick validation: WikiText2 perplexity and MMLU 5-shot only.
+- Full evaluation: run the complete benchmark suite, including commonsense,
+  MMLU 5-shot, and GSM8K 5-shot.
+
+Use quick validation for routine pruning iterations. Run the full evaluation
+only for selected configurations or when the user explicitly requests `full`.
 
 Install the evaluation dependencies from the repository root:
 

@@ -12,15 +12,15 @@ sys.path.insert(0, str(WANDA_DIR))
 
 from lib.hb_nm import (  # noqa: E402
     HBNMConfig,
-    Selective2To4Config,
+    HybridBlockSparseConfig,
     build_hb_nm_prune_mask,
-    build_selective_2_4_prune_mask,
+    build_hybrid_block_sparse_prune_mask,
     find_routed_expert_linears,
     magnitude_importance,
     validate_hb_nm_shape,
     validate_hb_nm_options,
     validate_qwen2_moe_layout,
-    validate_selective_2_4_options,
+    validate_hybrid_block_sparse_options,
     wanda_importance,
 )
 from lib.prune import _move_to_device, _routed_experts_only  # noqa: E402
@@ -60,7 +60,7 @@ class TestHBNMMask(unittest.TestCase):
         self.assertTrue(
             _routed_experts_only(
                 SimpleNamespace(
-                    sparsity_type="selective_2_4", routed_experts_only=False
+                    sparsity_type="hybrid_block_sparse", routed_experts_only=False
                 )
             )
         )
@@ -152,14 +152,14 @@ class TestHBNMMask(unittest.TestCase):
             validate_hb_nm_options(HBNMConfig(), prune_method="sparsegpt")
 
 
-class TestSelective2To4Mask(unittest.TestCase):
+class TestHybridBlockSparseMask(unittest.TestCase):
     def test_default_mask_has_twenty_five_percent_sparsity(self):
-        config = Selective2To4Config()
+        config = HybridBlockSparseConfig()
         importance = torch.rand(
             (32, 64), generator=torch.Generator().manual_seed(17)
         )
         prune_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, config), config
+            build_hybrid_block_sparse_prune_mask(importance, config), config
         )
 
         sparse_blocks = prune_blocks.any(dim=(-1, -2))
@@ -179,12 +179,12 @@ class TestSelective2To4Mask(unittest.TestCase):
         self.assertAlmostEqual(prune_blocks.float().mean().item(), 0.25, places=6)
 
     def test_selects_blocks_with_smallest_pruning_loss(self):
-        config = Selective2To4Config(block_h=4, block_w=4)
+        config = HybridBlockSparseConfig(block_h=4, block_w=4)
         importance = torch.tensor(
             [[1.0, 2.0, 10.0, 11.0, 5.0, 6.0, 10.0, 11.0]] * 4
         )
         prune_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, config), config
+            build_hybrid_block_sparse_prune_mask(importance, config), config
         )
         self.assertTrue(prune_blocks[0, 0].any().item())
         self.assertTrue(torch.all(~prune_blocks[0, 1]).item())
@@ -193,17 +193,17 @@ class TestSelective2To4Mask(unittest.TestCase):
         importance = torch.tensor(
             [[0.0, 10.0, 100.0, 100.0, 6.0, 6.0, 100.0, 100.0]]
         )
-        linear = Selective2To4Config(
+        linear = HybridBlockSparseConfig(
             block_h=1, block_w=4, score_mode="sum"
         )
-        squared = Selective2To4Config(
+        squared = HybridBlockSparseConfig(
             block_h=1, block_w=4, score_mode="squared_sum"
         )
         linear_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, linear), linear
+            build_hybrid_block_sparse_prune_mask(importance, linear), linear
         )
         squared_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, squared), squared
+            build_hybrid_block_sparse_prune_mask(importance, squared), squared
         )
 
         self.assertTrue(linear_blocks[0, 0].any().item())
@@ -216,27 +216,27 @@ class TestSelective2To4Mask(unittest.TestCase):
                 [0.0, 0.0, 100.0, 100.0, 5.0, 5.0, 100.0, 100.0],
             ]
         )
-        summed = Selective2To4Config(
+        summed = HybridBlockSparseConfig(
             block_h=2, block_w=4, score_mode="squared_sum"
         )
-        max_row = Selective2To4Config(
+        max_row = HybridBlockSparseConfig(
             block_h=2, block_w=4, score_mode="max_row_squared"
         )
         summed_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, summed), summed
+            build_hybrid_block_sparse_prune_mask(importance, summed), summed
         )
         max_row_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, max_row), max_row
+            build_hybrid_block_sparse_prune_mask(importance, max_row), max_row
         )
 
         self.assertTrue(summed_blocks[0, 0].any().item())
         self.assertTrue(max_row_blocks[0, 1].any().item())
 
     def test_ties_select_lower_block_and_keep_lower_elements(self):
-        config = Selective2To4Config(block_h=4, block_w=4)
+        config = HybridBlockSparseConfig(block_h=4, block_w=4)
         importance = torch.ones(4, 8)
         prune_blocks = _mask_as_blocks(
-            build_selective_2_4_prune_mask(importance, config), config
+            build_hybrid_block_sparse_prune_mask(importance, config), config
         )
         self.assertTrue(torch.all(~prune_blocks[0, 0, :, :2]).item())
         self.assertTrue(torch.all(prune_blocks[0, 0, :, 2:]).item())
@@ -244,30 +244,30 @@ class TestSelective2To4Mask(unittest.TestCase):
 
     def test_configurable_block_shapes_and_determinism(self):
         for config, shape in [
-            (Selective2To4Config(block_h=8, block_w=16), (16, 64)),
-            (Selective2To4Config(block_h=16, block_w=32), (32, 128)),
+            (HybridBlockSparseConfig(block_h=8, block_w=16), (16, 64)),
+            (HybridBlockSparseConfig(block_h=16, block_w=32), (32, 128)),
         ]:
             with self.subTest(config=config):
                 importance = torch.rand(
                     shape, generator=torch.Generator().manual_seed(23)
                 )
-                first = build_selective_2_4_prune_mask(importance, config)
-                second = build_selective_2_4_prune_mask(importance, config)
+                first = build_hybrid_block_sparse_prune_mask(importance, config)
+                second = build_hybrid_block_sparse_prune_mask(importance, config)
                 self.assertTrue(torch.equal(first, second))
                 self.assertAlmostEqual(first.float().mean().item(), 0.25, places=6)
 
     def test_rejects_legacy_arguments_and_sparsegpt(self):
         with self.assertRaisesRegex(ValueError, "cannot be combined"):
-            validate_selective_2_4_options(
-                Selective2To4Config(), "wanda", prune_n=2, prune_m=4
+            validate_hybrid_block_sparse_options(
+                HybridBlockSparseConfig(), "wanda", prune_n=2, prune_m=4
             )
         with self.assertRaisesRegex(ValueError, "only magnitude and wanda"):
-            validate_selective_2_4_options(
-                Selective2To4Config(), "sparsegpt"
+            validate_hybrid_block_sparse_options(
+                HybridBlockSparseConfig(), "sparsegpt"
             )
         with self.assertRaisesRegex(ValueError, "score_mode"):
-            validate_selective_2_4_options(
-                Selective2To4Config(score_mode="invalid"), "wanda"
+            validate_hybrid_block_sparse_options(
+                HybridBlockSparseConfig(score_mode="invalid"), "wanda"
             )
 
 
@@ -331,7 +331,7 @@ class TestRoutedExpertFiltering(unittest.TestCase):
                 (module.weight == 0).float().mean().item(), 0.75, places=6, msg=name
             )
 
-    def test_selective_2_4_leaves_non_routed_linears_unchanged(self):
+    def test_hybrid_block_sparse_leaves_non_routed_linears_unchanged(self):
         layer = _MockQwenMoeLayer()
         selected = find_routed_expert_linears(layer)
         untouched_before = {
@@ -340,9 +340,9 @@ class TestRoutedExpertFiltering(unittest.TestCase):
             if isinstance(module, nn.Linear) and name not in selected
         }
 
-        config = Selective2To4Config()
+        config = HybridBlockSparseConfig()
         for module in selected.values():
-            mask = build_selective_2_4_prune_mask(
+            mask = build_hybrid_block_sparse_prune_mask(
                 magnitude_importance(module.weight), config
             )
             module.weight.data[mask] = 0
