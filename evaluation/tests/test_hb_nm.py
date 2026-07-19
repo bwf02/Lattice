@@ -189,6 +189,49 @@ class TestSelective2To4Mask(unittest.TestCase):
         self.assertTrue(prune_blocks[0, 0].any().item())
         self.assertTrue(torch.all(~prune_blocks[0, 1]).item())
 
+    def test_squared_sum_uses_second_order_block_loss(self):
+        importance = torch.tensor(
+            [[0.0, 10.0, 100.0, 100.0, 6.0, 6.0, 100.0, 100.0]]
+        )
+        linear = Selective2To4Config(
+            block_h=1, block_w=4, score_mode="sum"
+        )
+        squared = Selective2To4Config(
+            block_h=1, block_w=4, score_mode="squared_sum"
+        )
+        linear_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, linear), linear
+        )
+        squared_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, squared), squared
+        )
+
+        self.assertTrue(linear_blocks[0, 0].any().item())
+        self.assertTrue(squared_blocks[0, 1].any().item())
+
+    def test_max_row_squared_limits_worst_row_loss(self):
+        importance = torch.tensor(
+            [
+                [0.0, 10.0, 100.0, 100.0, 5.0, 5.0, 100.0, 100.0],
+                [0.0, 0.0, 100.0, 100.0, 5.0, 5.0, 100.0, 100.0],
+            ]
+        )
+        summed = Selective2To4Config(
+            block_h=2, block_w=4, score_mode="squared_sum"
+        )
+        max_row = Selective2To4Config(
+            block_h=2, block_w=4, score_mode="max_row_squared"
+        )
+        summed_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, summed), summed
+        )
+        max_row_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, max_row), max_row
+        )
+
+        self.assertTrue(summed_blocks[0, 0].any().item())
+        self.assertTrue(max_row_blocks[0, 1].any().item())
+
     def test_ties_select_lower_block_and_keep_lower_elements(self):
         config = Selective2To4Config(block_h=4, block_w=4)
         importance = torch.ones(4, 8)
@@ -221,6 +264,10 @@ class TestSelective2To4Mask(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only magnitude and wanda"):
             validate_selective_2_4_options(
                 Selective2To4Config(), "sparsegpt"
+            )
+        with self.assertRaisesRegex(ValueError, "score_mode"):
+            validate_selective_2_4_options(
+                Selective2To4Config(score_mode="invalid"), "wanda"
             )
 
 

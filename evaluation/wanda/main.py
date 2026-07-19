@@ -58,6 +58,12 @@ def main():
     )
     parser.add_argument("--block_m", type=int, default=2, help="Blocks per HB-N:M group")
     parser.add_argument(
+        "--selective_score",
+        choices=["sum", "squared_sum", "max_row_squared"],
+        default="sum",
+        help="Block loss used to select blocks for selective_2_4",
+    )
+    parser.add_argument(
         "--routed_experts_only",
         action="store_true",
         help="Restrict legacy N:M pruning to routed MoE expert projections",
@@ -77,6 +83,7 @@ def main():
             block_w=args.block_w,
             block_n=args.block_n,
             block_m=args.block_m,
+            score_mode=args.selective_score,
         )
         try:
             validate_hb_nm_options(

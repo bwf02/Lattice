@@ -32,6 +32,7 @@ class Selective2To4Config:
     block_w: int = 16
     block_n: int = 1
     block_m: int = 2
+    score_mode: str = "sum"
 
     @property
     def sparsity(self):
@@ -59,6 +60,11 @@ def validate_hb_nm_options(config, prune_method, prune_n=0, prune_m=0):
 
 def validate_selective_2_4_options(config, prune_method, prune_n=0, prune_m=0):
     validate_hb_nm_config(config)
+    if config.score_mode not in {"sum", "squared_sum", "max_row_squared"}:
+        raise ValueError(
+            "selective_2_4 score_mode must be sum, squared_sum, or "
+            "max_row_squared"
+        )
     if prune_n != 0 or prune_m != 0:
         raise ValueError("selective_2_4 cannot be combined with --prune_n or --prune_m")
     if prune_method not in {"magnitude", "wanda"}:
@@ -181,7 +187,13 @@ def build_selective_2_4_prune_mask(importance, config):
     inner_keep.scatter_(-1, inner_order[..., :2], True)
     inner_prune = ~inner_keep
 
-    block_losses = (groups_of_four * inner_prune).sum(dim=(-1, -2, -3))
+    pruned_importance = groups_of_four * inner_prune
+    if config.score_mode == "sum":
+        block_losses = pruned_importance.sum(dim=(-1, -2, -3))
+    elif config.score_mode == "squared_sum":
+        block_losses = pruned_importance.square().sum(dim=(-1, -2, -3))
+    else:
+        block_losses = pruned_importance.square().sum(dim=(-1, -2)).amax(dim=-1)
     block_groups = block_losses.reshape(
         block_rows, block_columns // config.block_m, config.block_m
     )

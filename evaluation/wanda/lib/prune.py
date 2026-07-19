@@ -53,6 +53,7 @@ def _selective_2_4_config(args):
         block_w=args.block_w,
         block_n=args.block_n,
         block_m=args.block_m,
+        score_mode=args.selective_score,
     )
 
 
