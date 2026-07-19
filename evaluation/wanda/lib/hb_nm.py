@@ -26,6 +26,18 @@ class HBNMConfig:
         return 1.0 - self.density
 
 
+@dataclass(frozen=True)
+class Selective2To4Config:
+    block_h: int = 16
+    block_w: int = 16
+    block_n: int = 1
+    block_m: int = 2
+
+    @property
+    def sparsity(self):
+        return self.block_n / self.block_m * 0.5
+
+
 def validate_hb_nm_config(config):
     if config.block_h <= 0:
         raise ValueError("block_h must be greater than zero")
@@ -43,6 +55,16 @@ def validate_hb_nm_options(config, prune_method, prune_n=0, prune_m=0):
         raise ValueError("HB-N:M cannot be combined with --prune_n or --prune_m")
     if prune_method not in {"magnitude", "wanda"}:
         raise ValueError("HB-N:M currently supports only magnitude and wanda pruning")
+
+
+def validate_selective_2_4_options(config, prune_method, prune_n=0, prune_m=0):
+    validate_hb_nm_config(config)
+    if prune_n != 0 or prune_m != 0:
+        raise ValueError("selective_2_4 cannot be combined with --prune_n or --prune_m")
+    if prune_method not in {"magnitude", "wanda"}:
+        raise ValueError(
+            "selective_2_4 currently supports only magnitude and wanda pruning"
+        )
 
 
 def validate_hb_nm_shape(shape, config):
@@ -128,6 +150,52 @@ def build_hb_nm_prune_mask(importance, config):
         keep_blocks.permute(0, 2, 1, 3).contiguous().reshape(rows, columns)
     )
     return ~keep_mask
+
+
+def build_selective_2_4_prune_mask(importance, config):
+    """Prune 2:4 in the lowest-loss N blocks per group; leave other blocks dense."""
+    validate_hb_nm_shape(importance.shape, config)
+
+    rows, columns = importance.shape
+    block_rows = rows // config.block_h
+    block_columns = columns // config.block_w
+    blocks = (
+        importance.reshape(
+            block_rows, config.block_h, block_columns, config.block_w
+        )
+        .permute(0, 2, 1, 3)
+        .contiguous()
+    )
+
+    groups_of_four = blocks.reshape(
+        block_rows,
+        block_columns,
+        config.block_h,
+        config.block_w // 4,
+        4,
+    )
+    inner_order = torch.argsort(
+        groups_of_four, dim=-1, descending=True, stable=True
+    )
+    inner_keep = torch.zeros_like(groups_of_four, dtype=torch.bool)
+    inner_keep.scatter_(-1, inner_order[..., :2], True)
+    inner_prune = ~inner_keep
+
+    block_losses = (groups_of_four * inner_prune).sum(dim=(-1, -2, -3))
+    block_groups = block_losses.reshape(
+        block_rows, block_columns // config.block_m, config.block_m
+    )
+    block_order = torch.argsort(
+        block_groups, dim=-1, descending=False, stable=True
+    )
+    sparse_blocks = torch.zeros_like(block_groups, dtype=torch.bool)
+    sparse_blocks.scatter_(-1, block_order[..., : config.block_n], True)
+    sparse_blocks = sparse_blocks.reshape(block_rows, block_columns)
+
+    prune_blocks = inner_prune.reshape(
+        block_rows, block_columns, config.block_h, config.block_w
+    ) & sparse_blocks[..., None, None]
+    return prune_blocks.permute(0, 2, 1, 3).contiguous().reshape(rows, columns)
 
 
 def is_routed_expert_linear(name, module):

@@ -7,7 +7,9 @@ from .layerwrapper import WrappedGPT
 from .data import get_loaders 
 from .hb_nm import (
     HBNMConfig,
+    Selective2To4Config,
     build_hb_nm_prune_mask,
+    build_selective_2_4_prune_mask,
     find_routed_expert_linears,
     magnitude_importance,
     wanda_importance,
@@ -45,6 +47,15 @@ def _hb_nm_config(args):
     )
 
 
+def _selective_2_4_config(args):
+    return Selective2To4Config(
+        block_h=args.block_h,
+        block_w=args.block_w,
+        block_n=args.block_n,
+        block_m=args.block_m,
+    )
+
+
 def _find_prunable_layers(layer, hb_nm=False):
     if hb_nm:
         return find_routed_expert_linears(layer)
@@ -52,7 +63,7 @@ def _find_prunable_layers(layer, hb_nm=False):
 
 
 def _routed_experts_only(args):
-    return args.sparsity_type == "hb_nm" or args.routed_experts_only
+    return args.sparsity_type in {"hb_nm", "selective_2_4"} or args.routed_experts_only
 
 
 def _move_to_device(value, device):
@@ -159,7 +170,9 @@ def return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before):
 def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
     layers = model.model.layers 
     hb_nm = args.sparsity_type == "hb_nm"
+    selective_2_4 = args.sparsity_type == "selective_2_4"
     config = _hb_nm_config(args) if hb_nm else None
+    selective_config = _selective_2_4_config(args) if selective_2_4 else None
 
     for i in range(len(layers)):
         layer = layers[i]
@@ -172,6 +185,8 @@ def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune
             W_metric = magnitude_importance(W)
             if hb_nm:
                 W_mask = build_hb_nm_prune_mask(W_metric, config)
+            elif selective_2_4:
+                W_mask = build_selective_2_4_prune_mask(W_metric, selective_config)
             elif prune_n != 0:
                 W_mask = (torch.zeros_like(W)==1)
                 for ii in range(W_metric.shape[1]):
@@ -200,7 +215,9 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
 
     layers = model.model.layers
     hb_nm = args.sparsity_type == "hb_nm"
+    selective_2_4 = args.sparsity_type == "selective_2_4"
     config = _hb_nm_config(args) if hb_nm else None
+    selective_config = _selective_2_4_config(args) if selective_2_4 else None
     for i in range(len(layers)):
         layer = layers[i]
         subset = _find_prunable_layers(
@@ -242,6 +259,8 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
             W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
             if hb_nm:
                 W_mask = build_hb_nm_prune_mask(W_metric, config)
+            elif selective_2_4:
+                W_mask = build_selective_2_4_prune_mask(W_metric, selective_config)
             elif prune_n != 0:
                 # structured n:m sparsity
                 for ii in range(W_metric.shape[1]):

@@ -12,12 +12,15 @@ sys.path.insert(0, str(WANDA_DIR))
 
 from lib.hb_nm import (  # noqa: E402
     HBNMConfig,
+    Selective2To4Config,
     build_hb_nm_prune_mask,
+    build_selective_2_4_prune_mask,
     find_routed_expert_linears,
     magnitude_importance,
     validate_hb_nm_shape,
     validate_hb_nm_options,
     validate_qwen2_moe_layout,
+    validate_selective_2_4_options,
     wanda_importance,
 )
 from lib.prune import _move_to_device, _routed_experts_only  # noqa: E402
@@ -52,6 +55,13 @@ class TestHBNMMask(unittest.TestCase):
         self.assertFalse(
             _routed_experts_only(
                 SimpleNamespace(sparsity_type="2:8", routed_experts_only=False)
+            )
+        )
+        self.assertTrue(
+            _routed_experts_only(
+                SimpleNamespace(
+                    sparsity_type="selective_2_4", routed_experts_only=False
+                )
             )
         )
 
@@ -142,6 +152,78 @@ class TestHBNMMask(unittest.TestCase):
             validate_hb_nm_options(HBNMConfig(), prune_method="sparsegpt")
 
 
+class TestSelective2To4Mask(unittest.TestCase):
+    def test_default_mask_has_twenty_five_percent_sparsity(self):
+        config = Selective2To4Config()
+        importance = torch.rand(
+            (32, 64), generator=torch.Generator().manual_seed(17)
+        )
+        prune_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, config), config
+        )
+
+        sparse_blocks = prune_blocks.any(dim=(-1, -2))
+        block_groups = sparse_blocks.reshape(
+            sparse_blocks.shape[0], -1, config.block_m
+        )
+        self.assertTrue(
+            torch.all(block_groups.sum(dim=-1) == config.block_n).item()
+        )
+
+        selected = prune_blocks[sparse_blocks].reshape(
+            -1, config.block_h, config.block_w // 4, 4
+        )
+        dense = prune_blocks[~sparse_blocks]
+        self.assertTrue(torch.all(selected.sum(dim=-1) == 2).item())
+        self.assertTrue(torch.all(~dense).item())
+        self.assertAlmostEqual(prune_blocks.float().mean().item(), 0.25, places=6)
+
+    def test_selects_blocks_with_smallest_pruning_loss(self):
+        config = Selective2To4Config(block_h=4, block_w=4)
+        importance = torch.tensor(
+            [[1.0, 2.0, 10.0, 11.0, 5.0, 6.0, 10.0, 11.0]] * 4
+        )
+        prune_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, config), config
+        )
+        self.assertTrue(prune_blocks[0, 0].any().item())
+        self.assertTrue(torch.all(~prune_blocks[0, 1]).item())
+
+    def test_ties_select_lower_block_and_keep_lower_elements(self):
+        config = Selective2To4Config(block_h=4, block_w=4)
+        importance = torch.ones(4, 8)
+        prune_blocks = _mask_as_blocks(
+            build_selective_2_4_prune_mask(importance, config), config
+        )
+        self.assertTrue(torch.all(~prune_blocks[0, 0, :, :2]).item())
+        self.assertTrue(torch.all(prune_blocks[0, 0, :, 2:]).item())
+        self.assertTrue(torch.all(~prune_blocks[0, 1]).item())
+
+    def test_configurable_block_shapes_and_determinism(self):
+        for config, shape in [
+            (Selective2To4Config(block_h=8, block_w=16), (16, 64)),
+            (Selective2To4Config(block_h=16, block_w=32), (32, 128)),
+        ]:
+            with self.subTest(config=config):
+                importance = torch.rand(
+                    shape, generator=torch.Generator().manual_seed(23)
+                )
+                first = build_selective_2_4_prune_mask(importance, config)
+                second = build_selective_2_4_prune_mask(importance, config)
+                self.assertTrue(torch.equal(first, second))
+                self.assertAlmostEqual(first.float().mean().item(), 0.25, places=6)
+
+    def test_rejects_legacy_arguments_and_sparsegpt(self):
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            validate_selective_2_4_options(
+                Selective2To4Config(), "wanda", prune_n=2, prune_m=4
+            )
+        with self.assertRaisesRegex(ValueError, "only magnitude and wanda"):
+            validate_selective_2_4_options(
+                Selective2To4Config(), "sparsegpt"
+            )
+
+
 class _Expert(nn.Module):
     def __init__(self):
         super().__init__()
@@ -200,6 +282,30 @@ class TestRoutedExpertFiltering(unittest.TestCase):
         for name, module in selected.items():
             self.assertAlmostEqual(
                 (module.weight == 0).float().mean().item(), 0.75, places=6, msg=name
+            )
+
+    def test_selective_2_4_leaves_non_routed_linears_unchanged(self):
+        layer = _MockQwenMoeLayer()
+        selected = find_routed_expert_linears(layer)
+        untouched_before = {
+            name: module.weight.detach().clone()
+            for name, module in layer.named_modules()
+            if isinstance(module, nn.Linear) and name not in selected
+        }
+
+        config = Selective2To4Config()
+        for module in selected.values():
+            mask = build_selective_2_4_prune_mask(
+                magnitude_importance(module.weight), config
+            )
+            module.weight.data[mask] = 0
+
+        for name, before in untouched_before.items():
+            module = dict(layer.named_modules())[name]
+            self.assertTrue(torch.equal(module.weight, before), name)
+        for name, module in selected.items():
+            self.assertAlmostEqual(
+                (module.weight == 0).float().mean().item(), 0.25, places=6, msg=name
             )
 
     def test_qwen2_moe_layout_validation(self):
