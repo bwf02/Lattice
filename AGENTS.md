@@ -15,6 +15,7 @@
 
 ```bash
 git clone https://github.com/bwf02/MosaicMoE.git
+git clone https://github.com/bwf02/SparseGEMM.git
 cd MosaicMoE
 git checkout mosaic_moe_dev_eval
 ```
@@ -38,17 +39,17 @@ MosaicMoE/
 ├── end2end/
 │   └── sglang/          # SGLang end-to-end integration experiments
 ├── third_party/
-│   ├── SparseGEMM/      # Format, conversion, reference, and CUDA kernels
 │   └── sglang/          # Optional external SGLang checkout placeholder
 ├── patches/sglang/      # Temporary SGLang patches
 ├── scripts/             # Utility entry points
 └── docs/                # Design and experiment notes
 ```
 
-Do not place third-party source code directly under `mosaic_moe`. Sparse weight
-formats, conversion, references, and kernel implementations live in
-`third_party/SparseGEMM`; `mosaic_moe/kernels` should only contain small Python
-wrappers, build/load helpers, and dispatch code used by MosaicMoE.
+Do not place third-party source code directly under `mosaic_moe`. SparseGEMM is
+developed as an independent sibling repository containing sparse weight
+formats, conversion, references, and CUDA kernels. `mosaic_moe/kernels` should
+only contain small Python wrappers, build/load helpers, and dispatch code used
+by MosaicMoE.
 
 The intended data flow is:
 
@@ -64,7 +65,7 @@ For CPU-only format and reference work, install SparseGEMM without its CUDA
 extension:
 
 ```bash
-DG_SKIP_CUDA_BUILD=1 python -m pip install -e third_party/SparseGEMM
+DG_SKIP_CUDA_BUILD=1 python -m pip install -e ../SparseGEMM
 ```
 
 ## Remote Validation Workflow
@@ -74,12 +75,14 @@ Use this sequence for implementation and validation:
 1. Modify and run static checks in the local repository.
 2. Review the local diff, then commit and push after explicit approval.
 3. Connect to the current SSH port provided by the user; the port may change.
-4. Update `/ossfs/workspace/MosaicMoE` with `git pull --ff-only`.
+4. Pull SparseGEMM and MosaicMoE independently in their sibling directories.
 5. Run unit tests and model smoke tests in the remote GPU environment.
 
 ```bash
 ssh -p <current-port> 127.0.0.1
-cd /ossfs/workspace/MosaicMoE
+cd /dnn_training_sys/users/buweifeng.bwf/SparseGEMM
+git pull --ff-only origin main
+cd ../MosaicMoE
 git pull --ff-only origin mosaic_moe_dev_eval
 ```
 

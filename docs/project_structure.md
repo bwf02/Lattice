@@ -17,7 +17,6 @@ MosaicMoE/
 ├── end2end/
 │   └── sglang/          # SGLang integration experiments
 ├── third_party/
-│   ├── SparseGEMM/      # Format, conversion, reference, and CUDA kernels
 │   └── sglang/          # Optional external SGLang checkout placeholder
 ├── patches/sglang/      # Temporary SGLang patches
 ├── scripts/             # Utility entry points
@@ -34,6 +33,7 @@ pattern definition
   -> end-to-end SGLang integration
 ```
 
-`third_party/SparseGEMM` is the single owner of the kernel-facing hybrid sparse
-format. MosaicMoE owns pruning policy and evaluation, and imports conversion
-and computation APIs from the lightweight `sparse_gemm` Python package.
+The independent sibling repository `SparseGEMM` is the single owner of the
+kernel-facing hybrid sparse format. MosaicMoE owns pruning policy and
+evaluation, and imports conversion and computation APIs from the installed
+`sparse_gemm` Python package.
