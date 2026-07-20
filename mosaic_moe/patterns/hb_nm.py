@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from sparse_gemm.hybrid_sparse import HybridBlockSparseLayout
+
 
 _ROUTED_EXPERT_PATTERN = re.compile(
     r"(?:^|\.)mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)$"
@@ -27,16 +29,10 @@ class HBNMConfig:
 
 
 @dataclass(frozen=True)
-class HybridBlockSparseConfig:
-    block_h: int = 16
-    block_w: int = 16
-    block_n: int = 1
-    block_m: int = 2
-    score_mode: str = "sum"
+class HybridBlockSparseConfig(HybridBlockSparseLayout):
+    """Pruning options layered on SparseGEMM's kernel-facing layout."""
 
-    @property
-    def sparsity(self):
-        return self.block_n / self.block_m * 0.5
+    score_mode: str = "sum"
 
 
 def validate_hb_nm_config(config):

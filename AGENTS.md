@@ -29,7 +29,7 @@ MosaicMoE/
 ├── mosaic_moe/
 │   ├── patterns/        # Sparse pattern semantics and validators
 │   ├── pruning/         # Pruning frontends and HF checkpoint export
-│   ├── weight_convert/  # Sparse checkpoint to packed kernel artifacts
+│   ├── weight_convert/  # Compatibility exports for SparseGEMM conversion
 │   ├── core/            # Framework-independent runtime abstractions
 │   ├── kernels/         # Thin wrappers around third-party kernel backends
 │   └── search/          # Pattern and kernel parameter search
@@ -38,26 +38,33 @@ MosaicMoE/
 ├── end2end/
 │   └── sglang/          # SGLang end-to-end integration experiments
 ├── third_party/
-│   ├── SparseGEMM/      # External sparse GEMM kernel repository
+│   ├── SparseGEMM/      # Format, conversion, reference, and CUDA kernels
 │   └── sglang/          # Optional external SGLang checkout placeholder
 ├── patches/sglang/      # Temporary SGLang patches
 ├── scripts/             # Utility entry points
 └── docs/                # Design and experiment notes
 ```
 
-Do not place third-party source code directly under `mosaic_moe`. Kernel
-implementations live in `third_party/SparseGEMM`; `mosaic_moe/kernels` should
-only contain small Python wrappers, build/load helpers, dispatch code, and
-numerical correctness adapters used by MosaicMoE.
+Do not place third-party source code directly under `mosaic_moe`. Sparse weight
+formats, conversion, references, and kernel implementations live in
+`third_party/SparseGEMM`; `mosaic_moe/kernels` should only contain small Python
+wrappers, build/load helpers, and dispatch code used by MosaicMoE.
 
 The intended data flow is:
 
 ```text
 pattern definition
   -> pruning and zero-weight HF checkpoint
-  -> metadata and packed weight conversion
-  -> SparseGEMM kernel wrapper
+  -> SparseGEMM metadata and packed weight conversion
+  -> SparseGEMM reference or CUDA kernel
   -> end-to-end SGLang integration
+```
+
+For CPU-only format and reference work, install SparseGEMM without its CUDA
+extension:
+
+```bash
+DG_SKIP_CUDA_BUILD=1 python -m pip install -e third_party/SparseGEMM
 ```
 
 ## Remote Validation Workflow

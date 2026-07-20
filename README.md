@@ -16,7 +16,7 @@ MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that 
 
 - [ ] Keep sparse pattern definitions under `mosaic_moe/patterns`.
 - [ ] Keep pruning and accuracy evaluation under `evaluation` until the pipeline is stable.
-- [ ] Add packed weight and metadata conversion under `mosaic_moe/weight_convert`.
+- [x] Add packed weight and metadata conversion under `third_party/SparseGEMM`.
 - [ ] Use `third_party/SparseGEMM` as the external sparse kernel backend.
 - [ ] Keep `third_party/sglang` as an optional external SGLang checkout placeholder.
 - [ ] Put serving-framework integration work under `end2end/sglang`.
@@ -41,12 +41,12 @@ MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that 
 
 - [ ] Export standard Hugging Face checkpoints with zeroed sparse weights.
 - [ ] Implement an HB-N:M format validator.
-- [ ] Implement a MosaicMoE packer for nonzero weights, metadata, and config files.
-- [ ] Add pack / unpack numerical consistency tests.
+- [x] Implement a SparseGEMM packer for nonzero weights and metadata.
+- [x] Add pack / unpack numerical consistency tests.
 
 ### 4. Kernel
 
-- [ ] Implement dense reference and HB-N:M grouped GEMM prototypes through `third_party/SparseGEMM`.
+- [x] Implement dense, contiguous-grouped, and masked-grouped Torch references through `third_party/SparseGEMM`.
 - [ ] Implement index-driven routed activation loading.
 - [ ] Implement gate-up, activation, and down computation stages.
 - [ ] Add hybrid warp specialization, TMA / `cp.async` pipelines, and autotuning.

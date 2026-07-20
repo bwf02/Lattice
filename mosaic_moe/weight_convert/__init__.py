@@ -1,6 +1,6 @@
-"""Offline conversion from sparse checkpoints to packed kernel artifacts."""
+"""Compatibility exports for SparseGEMM-owned weight conversion."""
 
-from .hybrid_block_sparse import (
+from sparse_gemm.hybrid_sparse import (
     HybridBlockSparseWeight,
     dense_to_hybrid_block_sparse,
     hybrid_block_sparse_to_dense,
