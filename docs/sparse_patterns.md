@@ -43,6 +43,16 @@ block_n / block_m * 1/2
 Default `block_n=1, block_m=2` gives 25% sparsity. The overall format is not
 2:4; 2:4 is only the current inner pattern used inside selected sparse blocks.
 
+### Canonical weight storage
+
+Hybrid weights use one shared block selector and two compact value streams.
+For each block row and group, bit `j` of `block_selector` is one when local
+block `j` uses 2:4 sparsity and zero when it remains dense. Dense blocks are
+stored in `dense_values`; sparse blocks are stored as `sparse_values` plus a
+logical 2:4 pair code in `sparse_metadata`. Both streams follow increasing
+local block order. The selector uses `torch.int64` in the canonical format;
+the kernel backend may repack it and the 2:4 metadata for a target GPU.
+
 Example:
 
 ```bash
