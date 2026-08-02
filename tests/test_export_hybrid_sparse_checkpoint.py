@@ -30,7 +30,7 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                     {
                         "model_type": "qwen2_moe",
                         "hidden_size": 8,
-                        "moe_intermediate_size": 4,
+                        "moe_intermediate_size": 8,
                         "num_experts": 2,
                         "num_hidden_layers": 1,
                     }
@@ -41,14 +41,14 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
             for expert in range(2):
                 base = f"model.layers.0.mlp.experts.{expert}"
                 tensors[f"{base}.gate_proj.weight"] = torch.arange(
-                    32, dtype=torch.bfloat16
-                ).reshape(4, 8) + expert
+                    64, dtype=torch.bfloat16
+                ).reshape(8, 8) + expert
                 tensors[f"{base}.up_proj.weight"] = torch.arange(
-                    32, 64, dtype=torch.bfloat16
-                ).reshape(4, 8) + expert
+                    64, 128, dtype=torch.bfloat16
+                ).reshape(8, 8) + expert
                 tensors[f"{base}.down_proj.weight"] = torch.arange(
-                    32, dtype=torch.bfloat16
-                ).reshape(8, 4) + expert
+                    64, dtype=torch.bfloat16
+                ).reshape(8, 8) + expert
             save_file(tensors, checkpoint_dir / "model.safetensors")
 
             manifest_path = export_qwen15_moe_hybrid_sparse(
@@ -69,8 +69,8 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 manifest["weights"][0]["logical_name"],
                 "model.layers.0.mlp.experts.w13_weight",
             )
-            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 8, 8])
-            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 4])
+            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 16, 8])
+            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 8])
 
             payload = torch.load(
                 output_dir / manifest["weights"][0]["file"],
@@ -87,10 +87,9 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 hardware_metadata=payload["hardware_metadata"],
             )
             dense = hybrid_block_sparse_to_dense(packed)
-            self.assertEqual(tuple(dense.shape), (2, 8, 8))
+            self.assertEqual(tuple(dense.shape), (2, 16, 8))
             self.assertEqual(manifest["weights"][0]["sparsity"], 0.25)
 
 
 if __name__ == "__main__":
     unittest.main()
-
