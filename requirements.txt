@@ -5,3 +5,4 @@ lm-eval>=0.4.11
 # Model download backend: ModelScope is used instead of HuggingFace Hub so the
 # pipeline works in environments where huggingface.co is unreachable.
 modelscope>=1.10.0
+safetensors>=0.4.0
