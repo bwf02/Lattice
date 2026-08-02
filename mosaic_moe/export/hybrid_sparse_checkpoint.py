@@ -54,10 +54,11 @@ def export_qwen15_moe_hybrid_sparse(
 ) -> Path:
     """Pack Qwen1.5-MoE routed expert weights into SparseGEMM format.
 
-    The exported weights use SGLang's grouped MoE layout:
+    The exported weights keep the original routed expert projections separate:
 
-    - ``w13``: ``[num_experts, 2 * intermediate_size, hidden_size]``
-    - ``w2``: ``[num_experts, hidden_size, intermediate_size]``
+    - ``gate_proj``: ``[num_experts, intermediate_size, hidden_size]``
+    - ``up_proj``: ``[num_experts, intermediate_size, hidden_size]``
+    - ``down_proj``: ``[num_experts, hidden_size, intermediate_size]``
     """
     checkpoint_dir = checkpoint_dir.resolve()
     output_dir = output_dir.resolve()
@@ -103,9 +104,10 @@ def export_qwen15_moe_hybrid_sparse(
             )
             if key in config
         },
-        "sglang_layout": {
-            "w13": "[E, 2 * I, H], gate_proj followed by up_proj",
-            "w2": "[E, H, I]",
+        "projection_layout": {
+            "gate_proj": "[E, I, H]",
+            "up_proj": "[E, I, H]",
+            "down_proj": "[E, H, I]",
         },
         "export_options": asdict(options),
         "weights": [],
@@ -114,39 +116,28 @@ def export_qwen15_moe_hybrid_sparse(
     for layer_id in layers:
         layer_keys = grouped_keys[layer_id]
         experts = _validate_complete_layer(layer_id, layer_keys)
-        gate = _stack_expert_projection(key_to_file, layer_keys, experts, "gate_proj")
-        up = _stack_expert_projection(key_to_file, layer_keys, experts, "up_proj")
-        down = _stack_expert_projection(key_to_file, layer_keys, experts, "down_proj")
+        layer_entries = []
+        for projection in ("gate_proj", "up_proj", "down_proj"):
+            weight = _stack_expert_projection(
+                key_to_file, layer_keys, experts, projection
+            )
+            weight = weight.to(dtype=dtype).contiguous()
+            entry = _pack_and_save(
+                weight=weight,
+                logical_name=f"model.layers.{layer_id}.mlp.experts.{projection}.weight",
+                output_path=(
+                    output_dir / "weights" / f"layer_{layer_id:03d}_{projection}.pt"
+                ),
+                layout=layout,
+                options=options,
+                source_keys=[
+                    layer_keys[(expert_id, projection)] for expert_id in experts
+                ],
+            )
+            layer_entries.append(entry)
+            del weight
 
-        w13 = torch.cat([gate, up], dim=1).to(dtype=dtype).contiguous()
-        w2 = down.to(dtype=dtype).contiguous()
-        del gate, up, down
-
-        w13_entry = _pack_and_save(
-            weight=w13,
-            logical_name=f"model.layers.{layer_id}.mlp.experts.w13_weight",
-            output_path=output_dir / "weights" / f"layer_{layer_id:03d}_w13.pt",
-            layout=layout,
-            options=options,
-            source_keys=[
-                layer_keys[(expert_id, proj)]
-                for expert_id in experts
-                for proj in ("gate_proj", "up_proj")
-            ],
-        )
-        del w13
-
-        w2_entry = _pack_and_save(
-            weight=w2,
-            logical_name=f"model.layers.{layer_id}.mlp.experts.w2_weight",
-            output_path=output_dir / "weights" / f"layer_{layer_id:03d}_w2.pt",
-            layout=layout,
-            options=options,
-            source_keys=[layer_keys[(expert_id, "down_proj")] for expert_id in experts],
-        )
-        del w2
-
-        manifest["weights"].extend([w13_entry, w2_entry])
+        manifest["weights"].extend(layer_entries)
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -346,4 +337,3 @@ def _parse_dtype(dtype: str) -> torch.dtype:
         return choices[dtype.lower()]
     except KeyError as exc:
         raise ValueError(f"unsupported dtype {dtype!r}") from exc
-

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from mosaic_moe.export.hybrid_sparse_checkpoint import (
@@ -17,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Download or read Qwen1.5-MoE and export SGLang-ready SparseGEMM "
-            "hybrid block sparse w13/w2 weights."
+            "hybrid block sparse routed expert weights."
         )
     )
     parser.add_argument(
@@ -77,6 +78,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also save dense zero-filled weights in each .pt file for debugging.",
     )
+    parser.add_argument(
+        "--print-key-map",
+        action="store_true",
+        help="Print HF checkpoint source keys and exported SparseGEMM logical keys.",
+    )
     return parser.parse_args()
 
 
@@ -101,9 +107,27 @@ def main() -> None:
         output_dir=args.output_dir,
         options=options,
     )
+    if args.print_key_map:
+        _print_key_map(manifest_path)
     print(f"Exported SparseGEMM hybrid sparse weights: {manifest_path}")
+
+
+def _print_key_map(manifest_path: Path) -> None:
+    manifest = json.loads(manifest_path.read_text())
+    print("SparseGEMM export key map:")
+    for weight in manifest["weights"]:
+        print(f"- exported: {weight['logical_name']}")
+        print(f"  file: {weight['file']}")
+        print(f"  original_shape: {weight['original_shape']}")
+        print(f"  sparsity: {weight['sparsity']:.6f}")
+        print(f"  has_hardware_metadata: {weight['has_hardware_metadata']}")
+        print("  tensor_shapes:")
+        for name, shape in weight["tensor_shapes"].items():
+            print(f"    {name}: {shape}")
+        print("  source:")
+        for key in weight["source_keys"]:
+            print(f"    - {key}")
 
 
 if __name__ == "__main__":
     main()
-
