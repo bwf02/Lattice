@@ -79,6 +79,17 @@ def parse_args() -> argparse.Namespace:
         help="Also save dense zero-filled weights in each .pt file for debugging.",
     )
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of parallel worker processes for layer-level export.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip layers whose .pt files already exist in the output directory.",
+    )
+    parser.add_argument(
         "--print-key-map",
         action="store_true",
         help="Print HF checkpoint source keys and exported SparseGEMM logical keys.",
@@ -101,6 +112,8 @@ def main() -> None:
         dtype=args.dtype,
         max_layers=args.max_layers,
         keep_dense=args.keep_dense,
+        num_workers=args.num_workers,
+        skip_existing=args.skip_existing,
     )
     manifest_path = export_qwen15_moe_hybrid_sparse(
         checkpoint_dir=args.model_dir,

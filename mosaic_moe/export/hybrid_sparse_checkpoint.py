@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
@@ -34,6 +36,8 @@ class ExportOptions:
     dtype: str = "bfloat16"
     max_layers: Optional[int] = None
     keep_dense: bool = False
+    num_workers: int = 1
+    skip_existing: bool = False
 
 
 def maybe_download_model(model_id: str, model_dir: Path) -> None:
@@ -112,63 +116,143 @@ def export_qwen15_moe_hybrid_sparse(
         "weights": [],
     }
 
+    # Filter out layers that already have both .pt files when skip_existing
+    layers_to_export = list(layers)
+    if options.skip_existing:
+        layers_to_export = [
+            lid for lid in layers
+            if not _layer_files_exist(output_dir, lid)
+        ]
+        skipped = len(layers) - len(layers_to_export)
+        if skipped:
+            print(f"Skipping {skipped} layer(s) with existing .pt files")
+
+    results: Dict[int, List[dict]] = {}
+    if options.num_workers > 1:
+        # Parallel: dispatch layers to worker processes
+        workers = min(options.num_workers, len(layers_to_export))
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _export_single_layer_worker,
+                    checkpoint_dir,
+                    layer_id,
+                    output_dir,
+                    layout,
+                    options,
+                ): layer_id
+                for layer_id in layers_to_export
+            }
+            for future in as_completed(futures):
+                layer_id = futures[future]
+                results[layer_id] = future.result()
+                print(f"  layer {layer_id} done")
+    else:
+        # Serial: process layers in order
+        for layer_id in layers_to_export:
+            results[layer_id] = _export_single_layer_serial(
+                checkpoint_dir, layer_id, key_to_file, grouped_keys,
+                output_dir, layout, options, dtype,
+            )
+
+    # Flatten manifest entries in layer order
     for layer_id in layers:
-        layer_keys = grouped_keys[layer_id]
-        experts = _validate_complete_layer(layer_id, layer_keys)
-        layer_entries = []
-        gate_weight = _stack_expert_projection(
-            key_to_file, layer_keys, experts, "gate_proj"
-        )
-        up_weight = _stack_expert_projection(key_to_file, layer_keys, experts, "up_proj")
-        w13_weight = (
-            torch.cat([gate_weight, up_weight], dim=1).to(dtype=dtype).contiguous()
-        )
-        layer_entries.append(
-            _pack_and_save(
-                weight=w13_weight,
-                logical_name=f"model.layers.{layer_id}.mlp.experts.w13_weight",
-                output_path=(
-                    output_dir / "weights" / f"layer_{layer_id:03d}_w13_weight.pt"
-                ),
-                layout=layout,
-                options=options,
-                source_keys=[
-                    key
-                    for expert_id in experts
-                    for key in (
-                        layer_keys[(expert_id, "gate_proj")],
-                        layer_keys[(expert_id, "up_proj")],
-                    )
-                ],
-            )
-        )
-        del gate_weight, up_weight, w13_weight
-
-        down_weight = _stack_expert_projection(
-            key_to_file, layer_keys, experts, "down_proj"
-        )
-        down_weight = down_weight.to(dtype=dtype).contiguous()
-        layer_entries.append(
-            _pack_and_save(
-                weight=down_weight,
-                logical_name=f"model.layers.{layer_id}.mlp.experts.down_proj.weight",
-                output_path=(
-                    output_dir / "weights" / f"layer_{layer_id:03d}_down_proj.pt"
-                ),
-                layout=layout,
-                options=options,
-                source_keys=[
-                    layer_keys[(expert_id, "down_proj")] for expert_id in experts
-                ],
-            )
-        )
-        del down_weight
-
-        manifest["weights"].extend(layer_entries)
+        if layer_id in results:
+            manifest["weights"].extend(results[layer_id])
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return manifest_path
+
+
+def _layer_files_exist(output_dir: Path, layer_id: int) -> bool:
+    w13 = output_dir / "weights" / f"layer_{layer_id:03d}_w13_weight.pt"
+    down = output_dir / "weights" / f"layer_{layer_id:03d}_down_proj.pt"
+    return w13.is_file() and down.is_file()
+
+
+def _export_single_layer_worker(
+    checkpoint_dir: Path,
+    layer_id: int,
+    output_dir: Path,
+    layout: HybridBlockSparseConfig,
+    options: ExportOptions,
+) -> List[dict]:
+    """Worker entry point for parallel export. Rebuilds key index locally."""
+    threads = max(1, (os.cpu_count() or 1) // max(1, options.num_workers))
+    torch.set_num_threads(threads)
+    key_to_file = _build_tensor_index(checkpoint_dir)
+    grouped_keys = _collect_qwen_moe_keys(key_to_file)
+    dtype = _parse_dtype(options.dtype)
+    return _export_single_layer_serial(
+        checkpoint_dir, layer_id, key_to_file, grouped_keys,
+        output_dir, layout, options, dtype,
+    )
+
+
+def _export_single_layer_serial(
+    checkpoint_dir: Path,
+    layer_id: int,
+    key_to_file: Mapping[str, Path],
+    grouped_keys: Mapping[int, Mapping[Tuple[int, str], str]],
+    output_dir: Path,
+    layout: HybridBlockSparseConfig,
+    options: ExportOptions,
+    dtype: torch.dtype,
+) -> List[dict]:
+    """Process one MoE layer: load, pack and save w13 + down weights."""
+    layer_keys = grouped_keys[layer_id]
+    experts = _validate_complete_layer(layer_id, layer_keys)
+    layer_entries = []
+
+    gate_weight = _stack_expert_projection(
+        key_to_file, layer_keys, experts, "gate_proj"
+    )
+    up_weight = _stack_expert_projection(key_to_file, layer_keys, experts, "up_proj")
+    w13_weight = (
+        torch.cat([gate_weight, up_weight], dim=1).to(dtype=dtype).contiguous()
+    )
+    layer_entries.append(
+        _pack_and_save(
+            weight=w13_weight,
+            logical_name=f"model.layers.{layer_id}.mlp.experts.w13_weight",
+            output_path=(
+                output_dir / "weights" / f"layer_{layer_id:03d}_w13_weight.pt"
+            ),
+            layout=layout,
+            options=options,
+            source_keys=[
+                key
+                for expert_id in experts
+                for key in (
+                    layer_keys[(expert_id, "gate_proj")],
+                    layer_keys[(expert_id, "up_proj")],
+                )
+            ],
+        )
+    )
+    del gate_weight, up_weight, w13_weight
+
+    down_weight = _stack_expert_projection(
+        key_to_file, layer_keys, experts, "down_proj"
+    )
+    down_weight = down_weight.to(dtype=dtype).contiguous()
+    layer_entries.append(
+        _pack_and_save(
+            weight=down_weight,
+            logical_name=f"model.layers.{layer_id}.mlp.experts.down_proj.weight",
+            output_path=(
+                output_dir / "weights" / f"layer_{layer_id:03d}_down_proj.pt"
+            ),
+            layout=layout,
+            options=options,
+            source_keys=[
+                layer_keys[(expert_id, "down_proj")] for expert_id in experts
+            ],
+        )
+    )
+    del down_weight
+    return layer_entries
 
 
 def _pack_and_save(
