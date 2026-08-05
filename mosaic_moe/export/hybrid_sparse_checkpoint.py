@@ -54,10 +54,10 @@ def export_qwen15_moe_hybrid_sparse(
 ) -> Path:
     """Pack Qwen1.5-MoE routed expert weights into SparseGEMM format.
 
-    The exported weights keep the original routed expert projections separate:
+    The exported weights match SGLang fused MoE layout:
 
-    - ``gate_proj``: ``[num_experts, intermediate_size, hidden_size]``
-    - ``up_proj``: ``[num_experts, intermediate_size, hidden_size]``
+    - ``w13_weight``: ``[num_experts, 2 * intermediate_size, hidden_size]``,
+      with ``gate_proj`` followed by ``up_proj``.
     - ``down_proj``: ``[num_experts, hidden_size, intermediate_size]``
     """
     checkpoint_dir = checkpoint_dir.resolve()
@@ -105,8 +105,7 @@ def export_qwen15_moe_hybrid_sparse(
             if key in config
         },
         "projection_layout": {
-            "gate_proj": "[E, I, H]",
-            "up_proj": "[E, I, H]",
+            "w13_weight": "[E, 2I, H] = concat(gate_proj, up_proj, dim=1)",
             "down_proj": "[E, H, I]",
         },
         "export_options": asdict(options),
@@ -117,25 +116,53 @@ def export_qwen15_moe_hybrid_sparse(
         layer_keys = grouped_keys[layer_id]
         experts = _validate_complete_layer(layer_id, layer_keys)
         layer_entries = []
-        for projection in ("gate_proj", "up_proj", "down_proj"):
-            weight = _stack_expert_projection(
-                key_to_file, layer_keys, experts, projection
-            )
-            weight = weight.to(dtype=dtype).contiguous()
-            entry = _pack_and_save(
-                weight=weight,
-                logical_name=f"model.layers.{layer_id}.mlp.experts.{projection}.weight",
+        gate_weight = _stack_expert_projection(
+            key_to_file, layer_keys, experts, "gate_proj"
+        )
+        up_weight = _stack_expert_projection(key_to_file, layer_keys, experts, "up_proj")
+        w13_weight = (
+            torch.cat([gate_weight, up_weight], dim=1).to(dtype=dtype).contiguous()
+        )
+        layer_entries.append(
+            _pack_and_save(
+                weight=w13_weight,
+                logical_name=f"model.layers.{layer_id}.mlp.experts.w13_weight",
                 output_path=(
-                    output_dir / "weights" / f"layer_{layer_id:03d}_{projection}.pt"
+                    output_dir / "weights" / f"layer_{layer_id:03d}_w13_weight.pt"
                 ),
                 layout=layout,
                 options=options,
                 source_keys=[
-                    layer_keys[(expert_id, projection)] for expert_id in experts
+                    key
+                    for expert_id in experts
+                    for key in (
+                        layer_keys[(expert_id, "gate_proj")],
+                        layer_keys[(expert_id, "up_proj")],
+                    )
                 ],
             )
-            layer_entries.append(entry)
-            del weight
+        )
+        del gate_weight, up_weight, w13_weight
+
+        down_weight = _stack_expert_projection(
+            key_to_file, layer_keys, experts, "down_proj"
+        )
+        down_weight = down_weight.to(dtype=dtype).contiguous()
+        layer_entries.append(
+            _pack_and_save(
+                weight=down_weight,
+                logical_name=f"model.layers.{layer_id}.mlp.experts.down_proj.weight",
+                output_path=(
+                    output_dir / "weights" / f"layer_{layer_id:03d}_down_proj.pt"
+                ),
+                layout=layout,
+                options=options,
+                source_keys=[
+                    layer_keys[(expert_id, "down_proj")] for expert_id in experts
+                ],
+            )
+        )
+        del down_weight
 
         manifest["weights"].extend(layer_entries)
 

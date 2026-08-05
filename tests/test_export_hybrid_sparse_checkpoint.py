@@ -64,43 +64,33 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
             )
 
             manifest = json.loads(manifest_path.read_text())
-            self.assertEqual(len(manifest["weights"]), 3)
+            self.assertEqual(len(manifest["weights"]), 2)
             self.assertEqual(
                 manifest["weights"][0]["logical_name"],
-                "model.layers.0.mlp.experts.gate_proj.weight",
+                "model.layers.0.mlp.experts.w13_weight",
             )
             self.assertEqual(
                 manifest["weights"][0]["source_keys"],
                 [
                     "model.layers.0.mlp.experts.0.gate_proj.weight",
-                    "model.layers.0.mlp.experts.1.gate_proj.weight",
-                ],
-            )
-            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 8, 8])
-            self.assertEqual(
-                manifest["weights"][1]["logical_name"],
-                "model.layers.0.mlp.experts.up_proj.weight",
-            )
-            self.assertEqual(
-                manifest["weights"][1]["source_keys"],
-                [
                     "model.layers.0.mlp.experts.0.up_proj.weight",
+                    "model.layers.0.mlp.experts.1.gate_proj.weight",
                     "model.layers.0.mlp.experts.1.up_proj.weight",
                 ],
             )
-            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 8])
+            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 16, 8])
             self.assertEqual(
-                manifest["weights"][2]["logical_name"],
+                manifest["weights"][1]["logical_name"],
                 "model.layers.0.mlp.experts.down_proj.weight",
             )
             self.assertEqual(
-                manifest["weights"][2]["source_keys"],
+                manifest["weights"][1]["source_keys"],
                 [
                     "model.layers.0.mlp.experts.0.down_proj.weight",
                     "model.layers.0.mlp.experts.1.down_proj.weight",
                 ],
             )
-            self.assertEqual(manifest["weights"][2]["original_shape"], [2, 8, 8])
+            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 8])
 
             payload = torch.load(
                 output_dir / manifest["weights"][0]["file"],
@@ -117,7 +107,7 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 hardware_metadata=payload["hardware_metadata"],
             )
             dense = hybrid_block_sparse_to_dense(packed)
-            self.assertEqual(tuple(dense.shape), (2, 8, 8))
+            self.assertEqual(tuple(dense.shape), (2, 16, 8))
             self.assertEqual(manifest["weights"][0]["sparsity"], 0.25)
 
 
