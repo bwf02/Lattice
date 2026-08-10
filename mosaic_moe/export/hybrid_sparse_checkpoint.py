@@ -1,4 +1,4 @@
-"""Export Qwen1.5-MoE routed experts to SparseGEMM hybrid sparse format."""
+"""Export Qwen1.5-MoE experts to SparseGEMM hybrid sparse format."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ class ExportOptions:
     dtype: str = "bfloat16"
     max_layers: Optional[int] = None
     keep_dense: bool = False
+    include_shared_expert: bool = False
     num_workers: int = 1
     skip_existing: bool = False
 
@@ -56,7 +57,7 @@ def export_qwen15_moe_hybrid_sparse(
     output_dir: Path,
     options: ExportOptions,
 ) -> Path:
-    """Pack Qwen1.5-MoE routed expert weights into SparseGEMM format.
+    """Pack Qwen1.5-MoE expert weights into SparseGEMM format.
 
     The exported weights match SGLang fused MoE layout:
 
@@ -102,6 +103,7 @@ def export_qwen15_moe_hybrid_sparse(
                 "hidden_size",
                 "intermediate_size",
                 "moe_intermediate_size",
+                "shared_expert_intermediate_size",
                 "num_experts",
                 "num_experts_per_tok",
                 "num_hidden_layers",
@@ -111,6 +113,8 @@ def export_qwen15_moe_hybrid_sparse(
         "projection_layout": {
             "w13_weight": "[E, 2I, H] = concat(gate_proj, up_proj, dim=1)",
             "down_proj": "[E, H, I]",
+            "shared_gate_up_proj": "[2S, H] = concat(gate_proj, up_proj, dim=0)",
+            "shared_down_proj": "[H, S]",
         },
         "export_options": asdict(options),
         "weights": [],
@@ -121,14 +125,19 @@ def export_qwen15_moe_hybrid_sparse(
     if options.skip_existing:
         layers_to_export = [
             lid for lid in layers
-            if not _layer_files_exist(output_dir, lid)
+            if not _layer_files_exist(
+                output_dir, lid, options.include_shared_expert
+            )
         ]
         skipped = len(layers) - len(layers_to_export)
         if skipped:
             print(f"Skipping {skipped} layer(s) with existing .pt files")
 
     results: Dict[int, List[dict]] = {}
-    if options.num_workers > 1:
+    if not layers_to_export:
+        print("All layer files exist; rebuilding them to regenerate the manifest")
+        layers_to_export = list(layers)
+    if options.num_workers > 1 and layers_to_export:
         # Parallel: dispatch layers to worker processes
         workers = min(options.num_workers, len(layers_to_export))
         with ProcessPoolExecutor(max_workers=workers) as executor:
@@ -165,10 +174,24 @@ def export_qwen15_moe_hybrid_sparse(
     return manifest_path
 
 
-def _layer_files_exist(output_dir: Path, layer_id: int) -> bool:
+def _layer_files_exist(
+    output_dir: Path, layer_id: int, include_shared_expert: bool
+) -> bool:
     w13 = output_dir / "weights" / f"layer_{layer_id:03d}_w13_weight.pt"
     down = output_dir / "weights" / f"layer_{layer_id:03d}_down_proj.pt"
-    return w13.is_file() and down.is_file()
+    files = [w13, down]
+    if include_shared_expert:
+        files.extend(
+            (
+                output_dir
+                / "weights"
+                / f"layer_{layer_id:03d}_shared_gate_up_proj.pt",
+                output_dir
+                / "weights"
+                / f"layer_{layer_id:03d}_shared_down_proj.pt",
+            )
+        )
+    return all(path.is_file() for path in files)
 
 
 def _export_single_layer_worker(
@@ -252,6 +275,63 @@ def _export_single_layer_serial(
         )
     )
     del down_weight
+
+    if options.include_shared_expert:
+        shared_prefix = f"model.layers.{layer_id}.mlp.shared_expert"
+        shared_gate_key = f"{shared_prefix}.gate_proj.weight"
+        shared_up_key = f"{shared_prefix}.up_proj.weight"
+        shared_down_key = f"{shared_prefix}.down_proj.weight"
+        missing = [
+            key
+            for key in (shared_gate_key, shared_up_key, shared_down_key)
+            if key not in key_to_file
+        ]
+        if missing:
+            raise ValueError(
+                f"layer {layer_id} is missing shared expert weights: {missing}"
+            )
+
+        shared_gate_up = torch.cat(
+            (
+                _load_tensor(key_to_file, shared_gate_key),
+                _load_tensor(key_to_file, shared_up_key),
+            ),
+            dim=0,
+        ).to(dtype=dtype).contiguous()
+        layer_entries.append(
+            _pack_and_save(
+                weight=shared_gate_up,
+                logical_name=f"{shared_prefix}.gate_up_proj.weight",
+                output_path=(
+                    output_dir
+                    / "weights"
+                    / f"layer_{layer_id:03d}_shared_gate_up_proj.pt"
+                ),
+                layout=layout,
+                options=options,
+                source_keys=[shared_gate_key, shared_up_key],
+            )
+        )
+        del shared_gate_up
+
+        shared_down = _load_tensor(key_to_file, shared_down_key).to(
+            dtype=dtype
+        ).contiguous()
+        layer_entries.append(
+            _pack_and_save(
+                weight=shared_down,
+                logical_name=f"{shared_prefix}.down_proj.weight",
+                output_path=(
+                    output_dir
+                    / "weights"
+                    / f"layer_{layer_id:03d}_shared_down_proj.pt"
+                ),
+                layout=layout,
+                options=options,
+                source_keys=[shared_down_key],
+            )
+        )
+        del shared_down
     return layer_entries
 
 
@@ -320,6 +400,10 @@ def _build_prune_mask(
     weight: torch.Tensor, layout: HybridBlockSparseConfig, mask_source: str
 ) -> torch.Tensor:
     if mask_source == "magnitude":
+        if weight.dim() == 2:
+            return build_hybrid_block_sparse_prune_mask(
+                weight.abs().float(), layout
+            )
         masks = [
             build_hybrid_block_sparse_prune_mask(expert.abs().float(), layout)
             for expert in weight

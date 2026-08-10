@@ -31,6 +31,7 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                         "model_type": "qwen2_moe",
                         "hidden_size": 8,
                         "moe_intermediate_size": 8,
+                        "shared_expert_intermediate_size": 8,
                         "num_experts": 2,
                         "num_hidden_layers": 1,
                     }
@@ -49,6 +50,16 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 tensors[f"{base}.down_proj.weight"] = torch.arange(
                     64, dtype=torch.bfloat16
                 ).reshape(8, 8) + expert
+            shared = "model.layers.0.mlp.shared_expert"
+            tensors[f"{shared}.gate_proj.weight"] = torch.arange(
+                64, dtype=torch.bfloat16
+            ).reshape(8, 8)
+            tensors[f"{shared}.up_proj.weight"] = torch.arange(
+                64, 128, dtype=torch.bfloat16
+            ).reshape(8, 8)
+            tensors[f"{shared}.down_proj.weight"] = torch.arange(
+                64, dtype=torch.bfloat16
+            ).reshape(8, 8)
             save_file(tensors, checkpoint_dir / "model.safetensors")
 
             manifest_path = export_qwen15_moe_hybrid_sparse(
@@ -60,11 +71,12 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                     block_n=1,
                     block_m=2,
                     max_layers=1,
+                    include_shared_expert=True,
                 ),
             )
 
             manifest = json.loads(manifest_path.read_text())
-            self.assertEqual(len(manifest["weights"]), 2)
+            self.assertEqual(len(manifest["weights"]), 4)
             self.assertEqual(
                 manifest["weights"][0]["logical_name"],
                 "model.layers.0.mlp.experts.w13_weight",
@@ -91,6 +103,16 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 ],
             )
             self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 8])
+            self.assertEqual(
+                manifest["weights"][2]["logical_name"],
+                "model.layers.0.mlp.shared_expert.gate_up_proj.weight",
+            )
+            self.assertEqual(manifest["weights"][2]["original_shape"], [16, 8])
+            self.assertEqual(
+                manifest["weights"][3]["logical_name"],
+                "model.layers.0.mlp.shared_expert.down_proj.weight",
+            )
+            self.assertEqual(manifest["weights"][3]["original_shape"], [8, 8])
 
             payload = torch.load(
                 output_dir / manifest["weights"][0]["file"],

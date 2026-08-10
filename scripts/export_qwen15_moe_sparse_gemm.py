@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export Qwen1.5-MoE routed experts to SparseGEMM hybrid sparse weights."""
+"""Export Qwen1.5-MoE experts to SparseGEMM hybrid sparse weights."""
 
 from __future__ import annotations
 
@@ -79,6 +79,11 @@ def parse_args() -> argparse.Namespace:
         help="Also save dense zero-filled weights in each .pt file for debugging.",
     )
     parser.add_argument(
+        "--include-shared-expert",
+        action="store_true",
+        help="Also export the per-layer shared expert gate/up and down weights.",
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=1,
@@ -112,6 +117,7 @@ def main() -> None:
         dtype=args.dtype,
         max_layers=args.max_layers,
         keep_dense=args.keep_dense,
+        include_shared_expert=args.include_shared_expert,
         num_workers=args.num_workers,
         skip_existing=args.skip_existing,
     )
