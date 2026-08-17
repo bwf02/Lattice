@@ -43,6 +43,8 @@ MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that 
 - [ ] Implement an HB-N:M format validator.
 - [x] Implement a SparseGEMM packer for nonzero weights and metadata.
 - [x] Add pack / unpack numerical consistency tests.
+- [x] Export Qwen1.5-MoE, DeepSeek-V2-Lite, Qwen3 MoE, and Llama 4 fused
+  expert checkpoints into one canonical SGLang SparseGEMM layout.
 
 ### 4. Kernel
 
@@ -55,6 +57,6 @@ MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that 
 ### 5. End-to-End Integration
 
 - [ ] Define an independent MosaicMoE runtime API.
-- [ ] Integrate with the SGLang fused MoE backend under `end2end/sglang`.
-- [ ] Implement a packed checkpoint loader and backend selection option.
+- [x] Integrate with the SGLang fused MoE backend.
+- [x] Implement a packed checkpoint loader and backend selection option.
 - [ ] Compare against native Triton, DeepGEMM, CUTLASS, FlashInfer, and SGLang MoE backends.

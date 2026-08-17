@@ -8,6 +8,7 @@ from safetensors.torch import save_file
 
 from mosaic_moe.export.hybrid_sparse_checkpoint import (
     ExportOptions,
+    export_moe_hybrid_sparse,
     export_qwen15_moe_hybrid_sparse,
 )
 from sparse_gemm.hybrid_sparse import (
@@ -131,6 +132,106 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
             dense = hybrid_block_sparse_to_dense(packed)
             self.assertEqual(tuple(dense.shape), (2, 16, 8))
             self.assertEqual(manifest["weights"][0]["sparsity"], 0.25)
+
+    def test_exports_individual_experts_for_deepseek_and_qwen3(self):
+        for model_type, expert_field in (
+            ("deepseek_v2", {"n_routed_experts": 2}),
+            ("qwen3_moe", {"num_experts": 2}),
+        ):
+            with self.subTest(model_type=model_type), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                checkpoint_dir = root / "checkpoint"
+                checkpoint_dir.mkdir()
+                (checkpoint_dir / "config.json").write_text(
+                    json.dumps(
+                        {
+                            "model_type": model_type,
+                            "hidden_size": 8,
+                            "moe_intermediate_size": 8,
+                            "num_hidden_layers": 1,
+                            **expert_field,
+                        }
+                    )
+                )
+                tensors = {}
+                for expert in range(2):
+                    base = f"model.layers.0.mlp.experts.{expert}"
+                    for projection in ("gate_proj", "up_proj", "down_proj"):
+                        tensors[f"{base}.{projection}.weight"] = torch.arange(
+                            64, dtype=torch.bfloat16
+                        ).reshape(8, 8) + expert
+                save_file(tensors, checkpoint_dir / "model.safetensors")
+
+                manifest_path = export_moe_hybrid_sparse(
+                    checkpoint_dir,
+                    root / "packed",
+                    ExportOptions(block_h=4, block_w=4),
+                )
+                manifest = json.loads(manifest_path.read_text())
+                self.assertEqual(manifest["model_type"], model_type)
+                self.assertEqual(manifest["source_layout"], "individual_experts")
+                self.assertEqual(manifest["model_config"]["num_experts"], 2)
+                self.assertEqual(manifest["weights"][0]["original_shape"], [2, 16, 8])
+
+    def test_transposes_llama4_fused_experts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint_dir = root / "checkpoint"
+            output_dir = root / "packed"
+            checkpoint_dir.mkdir()
+            (checkpoint_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "llama4",
+                        "text_config": {
+                            "model_type": "llama4_text",
+                            "hidden_size": 8,
+                            "intermediate_size": 4,
+                            "num_local_experts": 2,
+                            "num_experts_per_tok": 1,
+                            "num_hidden_layers": 1,
+                        },
+                    }
+                )
+            )
+            prefix = "language_model.model.layers.0.feed_forward.experts"
+            gate_up = torch.arange(128, dtype=torch.bfloat16).reshape(2, 8, 8)
+            down = torch.arange(64, dtype=torch.bfloat16).reshape(2, 4, 8)
+            save_file(
+                {f"{prefix}.gate_up_proj": gate_up, f"{prefix}.down_proj": down},
+                checkpoint_dir / "model.safetensors",
+            )
+
+            manifest_path = export_moe_hybrid_sparse(
+                checkpoint_dir,
+                output_dir,
+                ExportOptions(block_h=4, block_w=4, keep_dense=True),
+            )
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest["model_type"], "llama4_text")
+            self.assertEqual(manifest["source_layout"], "llama4_fused_experts")
+            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 8, 8])
+            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 4])
+            for entry, expected in zip(
+                manifest["weights"],
+                (gate_up.transpose(1, 2), down.transpose(1, 2)),
+            ):
+                payload = torch.load(
+                    output_dir / entry["file"], weights_only=True
+                )
+                packed = HybridBlockSparseWeight(
+                    original_shape=tuple(payload["original_shape"]),
+                    layout=HybridBlockSparseLayout(**payload["layout"]),
+                    block_selector=payload["block_selector"],
+                    dense_values=payload["dense_values"],
+                    sparse_values=payload["sparse_values"],
+                    sparse_metadata=payload["sparse_metadata"],
+                    hardware_metadata=payload["hardware_metadata"],
+                )
+                pruned = payload["dense_zero_weight"]
+                self.assertTrue(torch.equal(hybrid_block_sparse_to_dense(packed), pruned))
+                retained = pruned != 0
+                self.assertTrue(torch.equal(pruned[retained], expected[retained]))
 
 
 if __name__ == "__main__":

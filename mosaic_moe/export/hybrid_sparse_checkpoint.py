@@ -1,4 +1,4 @@
-"""Export Qwen1.5-MoE experts to SparseGEMM hybrid sparse format."""
+"""Export Hugging Face MoE checkpoints to SparseGEMM hybrid sparse format."""
 
 from __future__ import annotations
 
@@ -23,6 +23,17 @@ _EXPERT_WEIGHT_RE = re.compile(
     r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\."
     r"(?P<proj>gate_proj|up_proj|down_proj)\.weight$"
 )
+_FUSED_EXPERT_WEIGHT_RE = re.compile(
+    r"^(?:language_model\.)?model\.layers\.(?P<layer>\d+)\.feed_forward\.experts\."
+    r"(?P<proj>gate_up_proj|down_proj)(?:\.weight)?$"
+)
+_SUPPORTED_MODEL_TYPES = {
+    "deepseek_v2",
+    "llama4",
+    "llama4_text",
+    "qwen2_moe",
+    "qwen3_moe",
+}
 
 
 @dataclass(frozen=True)
@@ -52,12 +63,12 @@ def maybe_download_model(model_id: str, model_dir: Path) -> None:
     snapshot_download(model_id=model_id, local_dir=str(model_dir))
 
 
-def export_qwen15_moe_hybrid_sparse(
+def export_moe_hybrid_sparse(
     checkpoint_dir: Path,
     output_dir: Path,
     options: ExportOptions,
 ) -> Path:
-    """Pack Qwen1.5-MoE expert weights into SparseGEMM format.
+    """Pack supported MoE expert weights into SparseGEMM format.
 
     The exported weights match SGLang fused MoE layout:
 
@@ -71,14 +82,16 @@ def export_qwen15_moe_hybrid_sparse(
     (output_dir / "weights").mkdir(exist_ok=True)
 
     config = _load_json(checkpoint_dir / "config.json")
-    if config.get("model_type") != "qwen2_moe":
+    model_config = _model_config(config)
+    model_type = model_config.get("model_type", config.get("model_type"))
+    if model_type not in _SUPPORTED_MODEL_TYPES:
         raise ValueError(
-            "expected a Qwen1.5-MoE checkpoint with model_type='qwen2_moe', "
-            f"got {config.get('model_type')!r}"
+            f"unsupported MoE model_type {model_type!r}; expected one of "
+            f"{sorted(_SUPPORTED_MODEL_TYPES)}"
         )
 
     key_to_file = _build_tensor_index(checkpoint_dir)
-    grouped_keys = _collect_qwen_moe_keys(key_to_file)
+    source_layout, grouped_keys = _collect_moe_keys(key_to_file)
     layers = sorted(grouped_keys)
     if options.max_layers is not None:
         layers = layers[: options.max_layers]
@@ -96,19 +109,21 @@ def export_qwen15_moe_hybrid_sparse(
         "format_version": 1,
         "format": "sparse_gemm.hybrid_block_sparse",
         "source_checkpoint": str(checkpoint_dir),
-        "model_type": config.get("model_type"),
+        "model_type": model_type,
+        "source_layout": source_layout,
         "model_config": {
-            key: config.get(key)
-            for key in (
-                "hidden_size",
-                "intermediate_size",
-                "moe_intermediate_size",
-                "shared_expert_intermediate_size",
+            "hidden_size": model_config.get("hidden_size"),
+            "moe_intermediate_size": model_config.get(
+                "moe_intermediate_size", model_config.get("intermediate_size")
+            ),
+            "num_experts": model_config.get(
                 "num_experts",
-                "num_experts_per_tok",
-                "num_hidden_layers",
-            )
-            if key in config
+                model_config.get(
+                    "n_routed_experts", model_config.get("num_local_experts")
+                ),
+            ),
+            "num_experts_per_tok": model_config.get("num_experts_per_tok"),
+            "num_hidden_layers": model_config.get("num_hidden_layers"),
         },
         "projection_layout": {
             "w13_weight": "[E, 2I, H] = concat(gate_proj, up_proj, dim=1)",
@@ -149,6 +164,7 @@ def export_qwen15_moe_hybrid_sparse(
                     output_dir,
                     layout,
                     options,
+                    source_layout,
                 ): layer_id
                 for layer_id in layers_to_export
             }
@@ -161,7 +177,7 @@ def export_qwen15_moe_hybrid_sparse(
         for layer_id in layers_to_export:
             results[layer_id] = _export_single_layer_serial(
                 checkpoint_dir, layer_id, key_to_file, grouped_keys,
-                output_dir, layout, options, dtype,
+                output_dir, layout, options, dtype, source_layout,
             )
 
     # Flatten manifest entries in layer order
@@ -172,6 +188,15 @@ def export_qwen15_moe_hybrid_sparse(
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return manifest_path
+
+
+def export_qwen15_moe_hybrid_sparse(
+    checkpoint_dir: Path,
+    output_dir: Path,
+    options: ExportOptions,
+) -> Path:
+    """Backward-compatible alias for the original Qwen1.5 exporter."""
+    return export_moe_hybrid_sparse(checkpoint_dir, output_dir, options)
 
 
 def _layer_files_exist(
@@ -200,16 +225,21 @@ def _export_single_layer_worker(
     output_dir: Path,
     layout: HybridBlockSparseConfig,
     options: ExportOptions,
+    source_layout: str,
 ) -> List[dict]:
     """Worker entry point for parallel export. Rebuilds key index locally."""
     threads = max(1, (os.cpu_count() or 1) // max(1, options.num_workers))
     torch.set_num_threads(threads)
     key_to_file = _build_tensor_index(checkpoint_dir)
-    grouped_keys = _collect_qwen_moe_keys(key_to_file)
+    detected_layout, grouped_keys = _collect_moe_keys(key_to_file)
+    if detected_layout != source_layout:
+        raise ValueError(
+            f"checkpoint layout changed from {source_layout!r} to {detected_layout!r}"
+        )
     dtype = _parse_dtype(options.dtype)
     return _export_single_layer_serial(
         checkpoint_dir, layer_id, key_to_file, grouped_keys,
-        output_dir, layout, options, dtype,
+        output_dir, layout, options, dtype, source_layout,
     )
 
 
@@ -222,19 +252,53 @@ def _export_single_layer_serial(
     layout: HybridBlockSparseConfig,
     options: ExportOptions,
     dtype: torch.dtype,
+    source_layout: str,
 ) -> List[dict]:
     """Process one MoE layer: load, pack and save w13 + down weights."""
     layer_keys = grouped_keys[layer_id]
-    experts = _validate_complete_layer(layer_id, layer_keys)
     layer_entries = []
 
-    gate_weight = _stack_expert_projection(
-        key_to_file, layer_keys, experts, "gate_proj"
-    )
-    up_weight = _stack_expert_projection(key_to_file, layer_keys, experts, "up_proj")
-    w13_weight = (
-        torch.cat([gate_weight, up_weight], dim=1).to(dtype=dtype).contiguous()
-    )
+    if source_layout == "individual_experts":
+        experts = _validate_complete_layer(layer_id, layer_keys)
+        gate_weight = _stack_expert_projection(
+            key_to_file, layer_keys, experts, "gate_proj"
+        )
+        up_weight = _stack_expert_projection(
+            key_to_file, layer_keys, experts, "up_proj"
+        )
+        w13_weight = torch.cat([gate_weight, up_weight], dim=1)
+        w13_source_keys = [
+            key
+            for expert_id in experts
+            for key in (
+                layer_keys[(expert_id, "gate_proj")],
+                layer_keys[(expert_id, "up_proj")],
+            )
+        ]
+        down_weight = _stack_expert_projection(
+            key_to_file, layer_keys, experts, "down_proj"
+        )
+        down_source_keys = [
+            layer_keys[(expert_id, "down_proj")] for expert_id in experts
+        ]
+        del gate_weight, up_weight
+    elif source_layout == "llama4_fused_experts":
+        missing = [
+            proj for proj in ("gate_up_proj", "down_proj") if proj not in layer_keys
+        ]
+        if missing:
+            raise ValueError(f"layer {layer_id} is missing fused expert weights: {missing}")
+        gate_up_key = layer_keys["gate_up_proj"]
+        down_key = layer_keys["down_proj"]
+        # Transformers stores Llama 4 experts as [E, H, 2I] and [E, I, H].
+        w13_weight = _load_tensor(key_to_file, gate_up_key).transpose(1, 2)
+        down_weight = _load_tensor(key_to_file, down_key).transpose(1, 2)
+        w13_source_keys = [gate_up_key]
+        down_source_keys = [down_key]
+    else:
+        raise ValueError(f"unsupported source layout {source_layout!r}")
+
+    w13_weight = w13_weight.to(dtype=dtype).contiguous()
     layer_entries.append(
         _pack_and_save(
             weight=w13_weight,
@@ -244,21 +308,11 @@ def _export_single_layer_serial(
             ),
             layout=layout,
             options=options,
-            source_keys=[
-                key
-                for expert_id in experts
-                for key in (
-                    layer_keys[(expert_id, "gate_proj")],
-                    layer_keys[(expert_id, "up_proj")],
-                )
-            ],
+            source_keys=w13_source_keys,
         )
     )
-    del gate_weight, up_weight, w13_weight
+    del w13_weight
 
-    down_weight = _stack_expert_projection(
-        key_to_file, layer_keys, experts, "down_proj"
-    )
     down_weight = down_weight.to(dtype=dtype).contiguous()
     layer_entries.append(
         _pack_and_save(
@@ -269,15 +323,14 @@ def _export_single_layer_serial(
             ),
             layout=layout,
             options=options,
-            source_keys=[
-                layer_keys[(expert_id, "down_proj")] for expert_id in experts
-            ],
+            source_keys=down_source_keys,
         )
     )
     del down_weight
 
     if options.include_shared_expert:
-        shared_prefix = f"model.layers.{layer_id}.mlp.shared_expert"
+        shared_prefix = _find_shared_expert_prefix(key_to_file, layer_id)
+        shared_logical_prefix = f"model.layers.{layer_id}.mlp.shared_expert"
         shared_gate_key = f"{shared_prefix}.gate_proj.weight"
         shared_up_key = f"{shared_prefix}.up_proj.weight"
         shared_down_key = f"{shared_prefix}.down_proj.weight"
@@ -301,7 +354,7 @@ def _export_single_layer_serial(
         layer_entries.append(
             _pack_and_save(
                 weight=shared_gate_up,
-                logical_name=f"{shared_prefix}.gate_up_proj.weight",
+                logical_name=f"{shared_logical_prefix}.gate_up_proj.weight",
                 output_path=(
                     output_dir
                     / "weights"
@@ -320,7 +373,7 @@ def _export_single_layer_serial(
         layer_entries.append(
             _pack_and_save(
                 weight=shared_down,
-                logical_name=f"{shared_prefix}.down_proj.weight",
+                logical_name=f"{shared_logical_prefix}.down_proj.weight",
                 output_path=(
                     output_dir
                     / "weights"
@@ -414,9 +467,7 @@ def _build_prune_mask(
     raise ValueError("mask_source must be 'magnitude' or 'zeros'")
 
 
-def _collect_qwen_moe_keys(
-    key_to_file: Mapping[str, Path]
-) -> Dict[int, Dict[Tuple[int, str], str]]:
+def _collect_moe_keys(key_to_file: Mapping[str, Path]) -> Tuple[str, Dict[int, dict]]:
     grouped: Dict[int, Dict[Tuple[int, str], str]] = {}
     for key in key_to_file:
         match = _EXPERT_WEIGHT_RE.match(key)
@@ -426,11 +477,41 @@ def _collect_qwen_moe_keys(
         expert_id = int(match.group("expert"))
         proj = match.group("proj")
         grouped.setdefault(layer_id, {})[(expert_id, proj)] = key
-    if not grouped:
-        raise ValueError(
-            "no Qwen1.5-MoE routed expert weights were found in the checkpoint"
-        )
-    return grouped
+    if grouped:
+        return "individual_experts", grouped
+
+    fused: Dict[int, Dict[str, str]] = {}
+    for key in key_to_file:
+        match = _FUSED_EXPERT_WEIGHT_RE.match(key)
+        if match is None:
+            continue
+        layer_id = int(match.group("layer"))
+        fused.setdefault(layer_id, {})[match.group("proj")] = key
+    if fused:
+        return "llama4_fused_experts", fused
+    raise ValueError("no supported routed expert weights were found in the checkpoint")
+
+
+def _find_shared_expert_prefix(
+    key_to_file: Mapping[str, Path], layer_id: int
+) -> str:
+    candidates = (
+        f"model.layers.{layer_id}.mlp.shared_expert",
+        f"model.layers.{layer_id}.mlp.shared_experts",
+        f"model.layers.{layer_id}.feed_forward.shared_expert",
+        f"language_model.model.layers.{layer_id}.feed_forward.shared_expert",
+    )
+    for prefix in candidates:
+        if f"{prefix}.gate_proj.weight" in key_to_file:
+            return prefix
+    raise ValueError(f"layer {layer_id} has no supported shared expert layout")
+
+
+def _model_config(config: dict) -> dict:
+    text_config = config.get("text_config")
+    if isinstance(text_config, dict):
+        return text_config
+    return config
 
 
 def _validate_complete_layer(

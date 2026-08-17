@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export Qwen1.5-MoE experts to SparseGEMM hybrid sparse weights."""
+"""Export supported MoE experts to SparseGEMM hybrid sparse weights."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from mosaic_moe.export.hybrid_sparse_checkpoint import (
     ExportOptions,
-    export_qwen15_moe_hybrid_sparse,
+    export_moe_hybrid_sparse,
     maybe_download_model,
 )
 
@@ -17,7 +17,7 @@ from mosaic_moe.export.hybrid_sparse_checkpoint import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Download or read Qwen1.5-MoE and export SGLang-ready SparseGEMM "
+            "Download or read a supported MoE model and export SGLang-ready SparseGEMM "
             "hybrid block sparse routed expert weights."
         )
     )
@@ -121,7 +121,7 @@ def main() -> None:
         num_workers=args.num_workers,
         skip_existing=args.skip_existing,
     )
-    manifest_path = export_qwen15_moe_hybrid_sparse(
+    manifest_path = export_moe_hybrid_sparse(
         checkpoint_dir=args.model_dir,
         output_dir=args.output_dir,
         options=options,
