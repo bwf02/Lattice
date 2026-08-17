@@ -22,7 +22,7 @@ CONTEXT_LENGTH=${CONTEXT_LENGTH:-2048}
 MAX_RUNNING_REQUESTS=${MAX_RUNNING_REQUESTS:-4}
 STARTUP_TIMEOUT=${STARTUP_TIMEOUT:-900}
 NUM_WORKERS=${NUM_WORKERS:-1}
-INCLUDE_SHARED_EXPERT=${INCLUDE_SHARED_EXPERT:-0}
+INCLUDE_SHARED_EXPERT=${INCLUDE_SHARED_EXPERT:-auto}
 LOG_FILE=${LOG_FILE:-/tmp/sglang-sparse-smoke-${SERVER_PORT}.log}
 
 for path in "$SGLANG_DIR" "$SPARSE_GEMM_DIR"; do
@@ -37,6 +37,26 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 export PYTHONPATH="$SGLANG_DIR/python:$SPARSE_GEMM_DIR:$MOSAIC_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+if [[ "$INCLUDE_SHARED_EXPERT" == auto ]]; then
+  model_type=$(
+    "$PYTHON_BIN" - "$MODEL_DIR/config.json" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1]))["model_type"])
+PY
+  )
+  if [[ "$model_type" == qwen2_moe ]]; then
+    INCLUDE_SHARED_EXPERT=1
+  else
+    INCLUDE_SHARED_EXPERT=0
+  fi
+fi
+if [[ "$INCLUDE_SHARED_EXPERT" != 0 && "$INCLUDE_SHARED_EXPERT" != 1 ]]; then
+  echo "INCLUDE_SHARED_EXPERT must be auto, 0, or 1" >&2
+  exit 2
+fi
 
 export_args=(
   "$MOSAIC_DIR/scripts/export_moe_sparse_gemm.py"
