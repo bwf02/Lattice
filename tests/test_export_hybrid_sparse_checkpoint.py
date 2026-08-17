@@ -186,7 +186,7 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                         "text_config": {
                             "model_type": "llama4_text",
                             "hidden_size": 8,
-                            "intermediate_size": 4,
+                            "intermediate_size": 8,
                             "num_local_experts": 2,
                             "num_experts_per_tok": 1,
                             "num_hidden_layers": 1,
@@ -195,8 +195,8 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 )
             )
             prefix = "language_model.model.layers.0.feed_forward.experts"
-            gate_up = torch.arange(128, dtype=torch.bfloat16).reshape(2, 8, 8)
-            down = torch.arange(64, dtype=torch.bfloat16).reshape(2, 4, 8)
+            gate_up = torch.arange(256, dtype=torch.bfloat16).reshape(2, 8, 16)
+            down = torch.arange(128, dtype=torch.bfloat16).reshape(2, 8, 8)
             save_file(
                 {f"{prefix}.gate_up_proj": gate_up, f"{prefix}.down_proj": down},
                 checkpoint_dir / "model.safetensors",
@@ -210,8 +210,8 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text())
             self.assertEqual(manifest["model_type"], "llama4_text")
             self.assertEqual(manifest["source_layout"], "llama4_fused_experts")
-            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 8, 8])
-            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 4])
+            self.assertEqual(manifest["weights"][0]["original_shape"], [2, 16, 8])
+            self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 8])
             for entry, expected in zip(
                 manifest["weights"],
                 (gate_up.transpose(1, 2), down.transpose(1, 2)),
