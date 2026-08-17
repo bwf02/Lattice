@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 from safetensors.torch import save_file
@@ -132,6 +133,25 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
             dense = hybrid_block_sparse_to_dense(packed)
             self.assertEqual(tuple(dense.shape), (2, 16, 8))
             self.assertEqual(manifest["weights"][0]["sparsity"], 0.25)
+
+            with patch(
+                "mosaic_moe.export.hybrid_sparse_checkpoint._pack_and_save",
+                side_effect=AssertionError("existing layers must not be repacked"),
+            ):
+                resumed_manifest_path = export_moe_hybrid_sparse(
+                    checkpoint_dir,
+                    output_dir,
+                    ExportOptions(
+                        block_h=4,
+                        block_w=4,
+                        include_shared_expert=True,
+                        skip_existing=True,
+                    ),
+                )
+            self.assertEqual(
+                json.loads(resumed_manifest_path.read_text())["weights"],
+                manifest["weights"],
+            )
 
     def test_exports_individual_experts_for_deepseek_and_qwen3(self):
         for model_type, expert_field in (

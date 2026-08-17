@@ -135,23 +135,31 @@ def export_moe_hybrid_sparse(
         "weights": [],
     }
 
-    # Filter out layers that already have both .pt files when skip_existing
+    results: Dict[int, List[dict]] = {}
     layers_to_export = list(layers)
     if options.skip_existing:
-        layers_to_export = [
-            lid for lid in layers
-            if not _layer_files_exist(
-                output_dir, lid, options.include_shared_expert
+        previous_manifest_path = output_dir / "manifest.json"
+        previous_entries = {}
+        if previous_manifest_path.is_file():
+            previous_entries = {
+                entry["logical_name"]: entry
+                for entry in _load_json(previous_manifest_path).get("weights", [])
+            }
+        reusable_layers = []
+        for layer_id in layers:
+            logical_names = _layer_logical_names(
+                layer_id, options.include_shared_expert
             )
-        ]
+            if _layer_files_exist(
+                output_dir, layer_id, options.include_shared_expert
+            ) and all(name in previous_entries for name in logical_names):
+                results[layer_id] = [previous_entries[name] for name in logical_names]
+                reusable_layers.append(layer_id)
+        layers_to_export = [lid for lid in layers if lid not in reusable_layers]
         skipped = len(layers) - len(layers_to_export)
         if skipped:
-            print(f"Skipping {skipped} layer(s) with existing .pt files")
+            print(f"Reusing {skipped} layer(s) from the existing manifest")
 
-    results: Dict[int, List[dict]] = {}
-    if not layers_to_export:
-        print("All layer files exist; rebuilding them to regenerate the manifest")
-        layers_to_export = list(layers)
     if options.num_workers > 1 and layers_to_export:
         # Parallel: dispatch layers to worker processes
         workers = min(options.num_workers, len(layers_to_export))
@@ -217,6 +225,21 @@ def _layer_files_exist(
             )
         )
     return all(path.is_file() for path in files)
+
+
+def _layer_logical_names(layer_id: int, include_shared_expert: bool) -> List[str]:
+    names = [
+        f"model.layers.{layer_id}.mlp.experts.w13_weight",
+        f"model.layers.{layer_id}.mlp.experts.down_proj.weight",
+    ]
+    if include_shared_expert:
+        names.extend(
+            (
+                f"model.layers.{layer_id}.mlp.shared_expert.gate_up_proj.weight",
+                f"model.layers.{layer_id}.mlp.shared_expert.down_proj.weight",
+            )
+        )
+    return names
 
 
 def _export_single_layer_worker(

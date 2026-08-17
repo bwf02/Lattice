@@ -10,3 +10,8 @@ Serving frameworks remain external third-party projects. MosaicMoE keeps only
 the adapter code, patches, and experiment entry points needed to reproduce the
 integration.
 
+Use `sglang/validate_sparse_gemm_model.sh MODEL_DIR EXPORT_DIR` for one-model
+validation. It exports or resumes the packed checkpoint, launches SGLang with
+the SparseGEMM MoE backend, and verifies health, model discovery, and a
+deterministic generation request. The script never downloads or deletes model
+weights; exports and logs should be placed under `/tmp` on remote GPU hosts.
