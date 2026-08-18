@@ -23,6 +23,7 @@ MAX_RUNNING_REQUESTS=${MAX_RUNNING_REQUESTS:-4}
 STARTUP_TIMEOUT=${STARTUP_TIMEOUT:-900}
 NUM_WORKERS=${NUM_WORKERS:-1}
 INCLUDE_SHARED_EXPERT=${INCLUDE_SHARED_EXPERT:-auto}
+LANGUAGE_ONLY=${LANGUAGE_ONLY:-auto}
 LOG_FILE=${LOG_FILE:-/tmp/sglang-sparse-smoke-${SERVER_PORT}.log}
 
 for path in "$SGLANG_DIR" "$SPARSE_GEMM_DIR"; do
@@ -38,15 +39,16 @@ fi
 
 export PYTHONPATH="$SGLANG_DIR/python:$SPARSE_GEMM_DIR:$MOSAIC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-if [[ "$INCLUDE_SHARED_EXPERT" == auto ]]; then
-  model_type=$(
-    "$PYTHON_BIN" - "$MODEL_DIR/config.json" <<'PY'
+model_type=$(
+  "$PYTHON_BIN" - "$MODEL_DIR/config.json" <<'PY'
 import json
 import sys
 
 print(json.load(open(sys.argv[1]))["model_type"])
 PY
-  )
+)
+
+if [[ "$INCLUDE_SHARED_EXPERT" == auto ]]; then
   if [[ "$model_type" == qwen2_moe ]]; then
     INCLUDE_SHARED_EXPERT=1
   else
@@ -55,6 +57,17 @@ PY
 fi
 if [[ "$INCLUDE_SHARED_EXPERT" != 0 && "$INCLUDE_SHARED_EXPERT" != 1 ]]; then
   echo "INCLUDE_SHARED_EXPERT must be auto, 0, or 1" >&2
+  exit 2
+fi
+if [[ "$LANGUAGE_ONLY" == auto ]]; then
+  if [[ "$model_type" == llama4 ]]; then
+    LANGUAGE_ONLY=1
+  else
+    LANGUAGE_ONLY=0
+  fi
+fi
+if [[ "$LANGUAGE_ONLY" != 0 && "$LANGUAGE_ONLY" != 1 ]]; then
+  echo "LANGUAGE_ONLY must be auto, 0, or 1" >&2
   exit 2
 fi
 
@@ -97,6 +110,9 @@ server_args=(
 )
 if [[ ${CPU_OFFLOAD_GB:-0} != 0 ]]; then
   server_args+=(--cpu-offload-gb "$CPU_OFFLOAD_GB")
+fi
+if [[ "$LANGUAGE_ONLY" == 1 ]]; then
+  server_args+=(--language-only)
 fi
 
 CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
