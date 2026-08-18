@@ -29,6 +29,7 @@ _FUSED_EXPERT_WEIGHT_RE = re.compile(
 )
 _SUPPORTED_MODEL_TYPES = {
     "deepseek_v2",
+    "ernie4_5_moe",
     "llama4",
     "llama4_text",
     "qwen2_moe",
@@ -119,10 +120,15 @@ def export_moe_hybrid_sparse(
             "num_experts": model_config.get(
                 "num_experts",
                 model_config.get(
-                    "n_routed_experts", model_config.get("num_local_experts")
+                    "n_routed_experts",
+                    model_config.get(
+                        "num_local_experts", model_config.get("moe_num_experts")
+                    ),
                 ),
             ),
-            "num_experts_per_tok": model_config.get("num_experts_per_tok"),
+            "num_experts_per_tok": model_config.get(
+                "num_experts_per_tok", model_config.get("moe_k")
+            ),
             "num_hidden_layers": model_config.get("num_hidden_layers"),
         },
         "projection_layout": {

@@ -157,6 +157,7 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
         for model_type, expert_field in (
             ("deepseek_v2", {"n_routed_experts": 2}),
             ("qwen3_moe", {"num_experts": 2}),
+            ("ernie4_5_moe", {"moe_num_experts": 2, "moe_k": 1}),
         ):
             with self.subTest(model_type=model_type), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -191,7 +192,65 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 self.assertEqual(manifest["model_type"], model_type)
                 self.assertEqual(manifest["source_layout"], "individual_experts")
                 self.assertEqual(manifest["model_config"]["num_experts"], 2)
+                if model_type == "ernie4_5_moe":
+                    self.assertEqual(
+                        manifest["model_config"]["num_experts_per_tok"], 1
+                    )
                 self.assertEqual(manifest["weights"][0]["original_shape"], [2, 16, 8])
+
+    def test_exports_ernie_shared_experts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint_dir = root / "checkpoint"
+            checkpoint_dir.mkdir()
+            (checkpoint_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "ernie4_5_moe",
+                        "hidden_size": 8,
+                        "moe_intermediate_size": 8,
+                        "moe_num_experts": 1,
+                        "moe_k": 1,
+                        "moe_num_shared_experts": 2,
+                        "num_hidden_layers": 1,
+                    }
+                )
+            )
+            tensors = {}
+            routed = "model.layers.0.mlp.experts.0"
+            shared = "model.layers.0.mlp.shared_experts"
+            for prefix, size in ((routed, 8), (shared, 16)):
+                tensors[f"{prefix}.gate_proj.weight"] = torch.arange(
+                    size * 8, dtype=torch.bfloat16
+                ).reshape(size, 8)
+                tensors[f"{prefix}.up_proj.weight"] = torch.arange(
+                    size * 8, dtype=torch.bfloat16
+                ).reshape(size, 8)
+                tensors[f"{prefix}.down_proj.weight"] = torch.arange(
+                    size * 8, dtype=torch.bfloat16
+                ).reshape(8, size)
+            save_file(tensors, checkpoint_dir / "model.safetensors")
+
+            manifest_path = export_moe_hybrid_sparse(
+                checkpoint_dir,
+                root / "packed",
+                ExportOptions(
+                    block_h=4,
+                    block_w=4,
+                    include_shared_expert=True,
+                ),
+            )
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(len(manifest["weights"]), 4)
+            self.assertEqual(
+                manifest["weights"][2]["source_keys"],
+                [
+                    "model.layers.0.mlp.shared_experts.gate_proj.weight",
+                    "model.layers.0.mlp.shared_experts.up_proj.weight",
+                ],
+            )
+            self.assertEqual(manifest["weights"][2]["original_shape"], [32, 8])
+            self.assertEqual(manifest["weights"][3]["original_shape"], [8, 16])
 
     def test_transposes_llama4_fused_experts(self):
         with tempfile.TemporaryDirectory() as tmp:
