@@ -1,7 +1,9 @@
 # Code adapted from https://github.com/IST-DASLab/sparsegpt/blob/master/datautils.py
 
-import numpy as np
+import os
 import random
+
+import numpy as np
 import torch
 from datasets import load_dataset
 
@@ -18,8 +20,17 @@ class TokenizerWrapper:
 # Load and process wikitext2 dataset
 def get_wikitext2(nsamples, seed, seqlen, tokenizer):
     # Load train and test datasets
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+    local_dir = os.environ.get("WIKITEXT2_DATA_DIR")
+    if local_dir:
+        data_files = {
+            "train": os.path.join(local_dir, "train-00000-of-00001.parquet"),
+            "test": os.path.join(local_dir, "test-00000-of-00001.parquet"),
+        }
+        traindata = load_dataset("parquet", data_files=data_files, split="train")
+        testdata = load_dataset("parquet", data_files=data_files, split="test")
+    else:
+        traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+        testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     # Encode datasets
     trainenc = tokenizer(" ".join(traindata['text']), return_tensors='pt')

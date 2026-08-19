@@ -47,7 +47,7 @@ import sys
 print(json.load(open(sys.argv[1]))["model_type"])
 PY
   )
-  if [[ "$model_type" == qwen2_moe || "$model_type" == ernie4_5_moe ]]; then
+  if [[ "$model_type" == qwen2_moe || "$model_type" == deepseek_v2 || "$model_type" == ernie4_5_moe ]]; then
     INCLUDE_SHARED_EXPERT=1
   else
     INCLUDE_SHARED_EXPERT=0
