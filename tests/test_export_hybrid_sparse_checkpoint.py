@@ -274,23 +274,43 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
                 )
             )
             prefix = "language_model.model.layers.0.feed_forward.experts"
+            shared_prefix = (
+                "language_model.model.layers.0.feed_forward.shared_expert"
+            )
             gate_up = torch.arange(256, dtype=torch.bfloat16).reshape(2, 8, 16)
             down = torch.arange(128, dtype=torch.bfloat16).reshape(2, 8, 8)
+            shared_gate = torch.arange(64, dtype=torch.bfloat16).reshape(8, 8)
+            shared_up = shared_gate + 64
+            shared_down = torch.arange(64, dtype=torch.bfloat16).reshape(8, 8)
             save_file(
-                {f"{prefix}.gate_up_proj": gate_up, f"{prefix}.down_proj": down},
+                {
+                    f"{prefix}.gate_up_proj": gate_up,
+                    f"{prefix}.down_proj": down,
+                    f"{shared_prefix}.gate_proj.weight": shared_gate,
+                    f"{shared_prefix}.up_proj.weight": shared_up,
+                    f"{shared_prefix}.down_proj.weight": shared_down,
+                },
                 checkpoint_dir / "model.safetensors",
             )
 
             manifest_path = export_moe_hybrid_sparse(
                 checkpoint_dir,
                 output_dir,
-                ExportOptions(block_h=4, block_w=4, keep_dense=True),
+                ExportOptions(
+                    block_h=4,
+                    block_w=4,
+                    keep_dense=True,
+                    include_shared_expert=True,
+                ),
             )
             manifest = json.loads(manifest_path.read_text())
             self.assertEqual(manifest["model_type"], "llama4_text")
             self.assertEqual(manifest["source_layout"], "llama4_fused_experts")
+            self.assertEqual(len(manifest["weights"]), 4)
             self.assertEqual(manifest["weights"][0]["original_shape"], [2, 16, 8])
             self.assertEqual(manifest["weights"][1]["original_shape"], [2, 8, 8])
+            self.assertEqual(manifest["weights"][2]["original_shape"], [16, 8])
+            self.assertEqual(manifest["weights"][3]["original_shape"], [8, 8])
             for entry, expected in zip(
                 manifest["weights"],
                 (gate_up.transpose(1, 2), down.transpose(1, 2)),
