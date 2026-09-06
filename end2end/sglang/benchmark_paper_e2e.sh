@@ -105,6 +105,7 @@ printf '%s\n' \
   "dataset_path=$DATASET_PATH" \
   "random_range_ratio=$RANDOM_RANGE_RATIO" \
   "pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF:-unset}" \
+  "slidesparse_activation_chunk_m=${SLIDESPARSE_ACTIVATION_CHUNK_M:-0}" \
   "qwen15_model_dir=${MODEL_DIRS[qwen15]}" \
   "deepseek_v2_lite_model_dir=${MODEL_DIRS[deepseek_v2_lite]}" \
   "qwen3_model_dir=${MODEL_DIRS[qwen3]}" \

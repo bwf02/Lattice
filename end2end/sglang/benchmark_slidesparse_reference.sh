@@ -17,11 +17,13 @@ for model in $MODELS; do
     RESULT_ROOT="$ROOT/qwen3-tp4" MODEL_NAMES=qwen3 PROFILES='prefill decode' \
       QWEN3_TP_SIZE=4 QWEN3_GPU_SET=0,1,2,3 QWEN3_MEM_FRACTION=0.68 \
       QWEN3_DISABLE_ALLREDUCE_FUSION=1 DECODE_CONCURRENCIES='8 16' \
+      SLIDESPARSE_ACTIVATION_CHUNK_M=1024 \
       bash "$SCRIPT_DIR/benchmark_paper_e2e.sh"
     # BS32/64 retain the earlier TP2 measurements in the paper figure.
     RESULT_ROOT="$ROOT/qwen3-tp2" MODEL_NAMES=qwen3 PROFILES=decode \
       QWEN3_TP_SIZE=2 QWEN3_GPU_SET=0,1 QWEN3_MEM_FRACTION=0.60 \
       QWEN3_DISABLE_ALLREDUCE_FUSION=0 DECODE_CONCURRENCIES='32 64' \
+      SLIDESPARSE_ACTIVATION_CHUNK_M=1024 \
       bash "$SCRIPT_DIR/benchmark_paper_e2e.sh"
   else
     RESULT_ROOT="$ROOT/$model" MODEL_NAMES="$model" PROFILES='prefill decode' \
