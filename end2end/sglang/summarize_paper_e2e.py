@@ -91,6 +91,8 @@ def speedup_metric(profile: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("result_root", type=Path)
+    parser.add_argument("--reference-csv", type=Path,
+                        help="Archived paper figure data; compare without rerunning baselines")
     args = parser.parse_args()
     raw_dir = args.result_root / "raw"
     rows = []
@@ -205,6 +207,53 @@ def main() -> None:
             writer = csv.DictWriter(f, fieldnames=list(comparisons[0]))
             writer.writeheader()
             writer.writerows(comparisons)
+
+    if args.reference_csv:
+        with args.reference_csv.open() as f:
+            reference_rows = list(csv.DictReader(f))
+        references = {}
+        for row in reference_rows:
+            key = (row["model"], row["profile"], row["case"])
+            if key in references:
+                raise ValueError(f"Duplicate reference case: {key}")
+            references[key] = row
+        slidesparse_comparisons = []
+        for row in aggregate:
+            if row["backend"] != "slidesparse":
+                continue
+            key = (row["model"], row["profile"], row["case"])
+            reference = references[key]
+            for field in ("input_len", "output_len", "concurrency"):
+                if int(row[field]) != int(reference[field]):
+                    raise ValueError(f"Workload mismatch for {key}: {field}")
+            metric = speedup_metric(row["profile"])
+            if reference["primary_metric"] != metric:
+                raise ValueError(f"Metric mismatch for {key}")
+            value = float(row[f"{metric}_mean"])
+            deep = float(reference["deep_gemm"])
+            sparse = float(reference["sparse_gemm"])
+            if not all(math.isfinite(v) and v > 0 for v in (value, deep, sparse)):
+                raise ValueError(f"Invalid primary measurement for {key}")
+            latency = metric.endswith("latency_ms")
+            slidesparse_comparisons.append({
+                "model": row["model"], "profile": row["profile"], "case": row["case"],
+                "input_len": row["input_len"], "output_len": row["output_len"],
+                "concurrency": row["concurrency"], "primary_metric": metric,
+                "deep_gemm": deep, "sparse_gemm": sparse, "slidesparse": value,
+                "slidesparse_over_deepgemm": deep / value if latency else value / deep,
+                "losparse_over_slidesparse": value / sparse if latency else sparse / value,
+                "slidesparse_e2e_ms": row["mean_e2e_latency_ms_mean"],
+                "slidesparse_ttft_ms": row["mean_ttft_ms_mean"],
+                "slidesparse_itl_ms": row["mean_itl_ms_mean"],
+                "repeats": row["repeats"],
+                "reference_csv": str(args.reference_csv.resolve()),
+                "reference_run": reference.get("source_run", ""),
+            })
+        if slidesparse_comparisons:
+            with (args.result_root / "slidesparse_comparisons.csv").open("w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(slidesparse_comparisons[0]))
+                writer.writeheader()
+                writer.writerows(slidesparse_comparisons)
 
 
 if __name__ == "__main__":
