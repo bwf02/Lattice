@@ -30,6 +30,16 @@ class ArchivedComparisonTest(unittest.TestCase):
                 row = next(csv.DictReader(f))
             self.assertEqual(float(row["slidesparse_over_deepgemm"]), 0.5)
             self.assertEqual(float(row["losparse_over_slidesparse"]), 4.0)
+            merge = [sys.executable, str(Path(__file__).with_name("merge_slidesparse_reference.py")),
+                     str(reference), str(root / "merged.csv"), str(root)]
+            subprocess.run(merge, check=True, capture_output=True)
+            with (root / "merged.csv").open() as f:
+                merged = next(csv.DictReader(f))
+            self.assertEqual(merged["deep_gemm"], "4096")
+            self.assertEqual(float(merged["slidesparse_speedup"]), 0.5)
+            duplicate = subprocess.run(merge + [str(root)], capture_output=True, text=True)
+            self.assertNotEqual(duplicate.returncode, 0)
+            self.assertIn("Duplicate collected case", duplicate.stderr)
             reference.write_text(reference.read_text().replace("1024,1,4", "1024,1,8"))
             failed = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(failed.returncode, 0)
