@@ -22,6 +22,7 @@ CUDA_GRAPH_BS_DECODE=${CUDA_GRAPH_BS_DECODE:-1 2 4 8 16 32 64 128 256 512}
 DECODE_CONCURRENCIES=${DECODE_CONCURRENCIES:-8 16 32 64}
 PREFILL_M_VALUES=${PREFILL_M_VALUES:-4096 8192 16384 32768}
 PREFILL_BENCHMARK_MODE=${PREFILL_BENCHMARK_MODE:-single_batch}
+QWEN3_DISABLE_ALLREDUCE_FUSION=${QWEN3_DISABLE_ALLREDUCE_FUSION:-1}
 SPARSE_SHARED_MIN_M=${SPARSE_SHARED_MIN_M:-}
 SPARSE_LAYOUT=${SPARSE_LAYOUT:-auto}
 SPARSE_CONTIGUOUS_MIN_M=${SPARSE_CONTIGUOUS_MIN_M:-4096}
@@ -123,6 +124,7 @@ printf '%s\n' \
   "qwen15_mem_fraction=${MEM_FRACTIONS[qwen15]}" \
   "deepseek_v2_lite_mem_fraction=${MEM_FRACTIONS[deepseek_v2_lite]}" \
   "qwen3_mem_fraction=${MEM_FRACTIONS[qwen3]}" \
+  "qwen3_disable_allreduce_fusion=$QWEN3_DISABLE_ALLREDUCE_FUSION" \
   "llama4_scout_mem_fraction=${MEM_FRACTIONS[llama4_scout]}" \
   "decode_cuda_graph_bs=$CUDA_GRAPH_BS_DECODE" \
   "decode_concurrencies=$DECODE_CONCURRENCIES" \
@@ -175,7 +177,7 @@ start_server() {
   local server_log=$RESULT_ROOT/logs/${run_name}.server.log
   local -a graph_args=(--cuda-graph-bs-decode $CUDA_GRAPH_BS_DECODE)
   local -a model_args=()
-  if [[ "$model_name" == qwen3 ]]; then
+  if [[ "$model_name" == qwen3 && "$QWEN3_DISABLE_ALLREDUCE_FUSION" == 1 ]]; then
     model_args+=(--enforce-disable-flashinfer-allreduce-fusion)
   fi
   if [[ "$profile" == prefill ]]; then
