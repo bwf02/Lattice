@@ -1,62 +1,101 @@
-# MosaicMoE
+# LATTICE: Sparse MoE Inference on GPUs
 
-MosaicMoE is being refactored toward a single-GPU sparse MoE kernel design that focuses on block-structured / HB-N:M sparse expert computation. The revised direction removes the old padding-free motivation and emphasizes sparse format + kernel co-design for routed MoE workloads.
+LATTICE co-designs hierarchical weight sparsity and expert-aware grouped GEMM
+for efficient Mixture-of-Experts (MoE) inference on NVIDIA Hopper GPUs.
+This repository is the main entry point for pruning, model-quality evaluation,
+checkpoint export, and end-to-end experiments. It was previously named MosaicMoE;
+the Python package remains `mosaic_moe` for compatibility.
 
-## Revision Focus
+## Overview
 
-- [ ] Reposition HB-N:M as a sparse format for MoE routed token layouts, not a general sparse format.
-- [ ] Focus on single-GPU grouped GEMM based sparse expert computation.
-- [ ] Remove the assumption that modern MoE systems materialize padded activation buffers.
-- [ ] Optimize sparse weight and routed activation paths separately with hybrid warp specialization.
-- [ ] Validate accuracy on Qwen 16B / 30B before committing to kernel-level acceleration.
+Low weight sparsity can preserve MoE model quality, but converting reduced
+arithmetic into GPU speedup requires controlling format and scheduling overheads.
+LATTICE combines Hierarchical Block N:M (HiBNM) weights with Max-Row
+Sum-of-Squares (MRSS) pruning to protect sensitive rows. A custom sparse grouped
+GEMM backend uses hierarchical tiling, asynchronous pipelining, and the
+Active-Expert Prebind (AEP) Scheduler. Integration with SGLang supports
+evaluation of prefill and decoding.
 
-## Code Roadmap
+## Repositories and checkout
 
-### 0. Project Structure
+| Repository | Responsibility |
+|---|---|
+| [Lattice](https://github.com/bwf02/Lattice/tree/paper-dev) | Pruning, accuracy, checkpoint export, experiment orchestration |
+| [SparseGEMM](https://github.com/bwf02/SparseGEMM/tree/paper-dev) | Sparse formats, packing, CUDA kernels, kernel benchmarks |
+| [sglang](https://github.com/bwf02/sglang/tree/paper-dev) | Serving integration and MoE backend selection |
 
-- [ ] Keep sparse pattern definitions under `mosaic_moe/patterns`.
-- [ ] Keep pruning and accuracy evaluation under `evaluation` until the pipeline is stable.
-- [x] Add packed weight and metadata conversion in the independent SparseGEMM repository.
-- [x] Use the installed `sparse_gemm` package as the external sparse kernel backend.
-- [ ] Keep `third_party/sglang` as an optional external SGLang checkout placeholder.
-- [ ] Put serving-framework integration work under `end2end/sglang`.
-- [ ] Keep temporary SGLang patches under `patches/sglang`.
+The paper code is on **`paper-dev`**, not the older `main` branches.
+Keep the repositories in sibling directories:
 
-### 1. Pruning
+```bash
+mkdir lattice-workspace
+cd lattice-workspace
+git clone --branch paper-dev https://github.com/bwf02/Lattice.git
+git clone --branch paper-dev https://github.com/bwf02/SparseGEMM.git
+git clone --branch paper-dev https://github.com/bwf02/sglang.git
+git -C SparseGEMM checkout 3b27d079d21e67732bce600776193c182d7de689
+git -C sglang checkout b4150ea6d49c415a535baad0495acbf91901e980
+git -C SparseGEMM submodule update --init --recursive
+cd Lattice
+```
 
-- [ ] Build MosaicMoE pruning and accuracy scripts under `evaluation`.
-- [ ] Add routed expert layer filtering, excluding attention, router, and shared expert layers.
-- [ ] Decouple Wanda / SparseGPT importance computation from mask generation.
-- [ ] Implement dense, 2:4, 4:6, 6:8, V:N:M, and HB-N:M masks.
+Access to this repository is required while it remains private. Record the
+Lattice commit and both companion revisions with every experiment.
 
-### 2. Evaluation
+## Accuracy experiments
 
-- [ ] Fix calibration set, random seed, sample count, and sequence length.
-- [ ] Add WikiText2 perplexity and `lm-eval` scripts.
-- [ ] Record actual sparsity, per-layer sparsity, and task accuracy automatically.
-- [ ] Run the full pipeline on the smallest model first before scaling to larger MoE models.
-- [ ] Evaluate Qwen1.5-MoE-A2.7B, DeepSeek-V2-Lite, Qwen3-30B-A3B-Instruct-2507, and Mixtral-8x7B.
+See **[Accuracy reproduction](evaluation/ACCURACY_REPRODUCTION.md)** for
+environment setup, Qwen3/HiBNM/MRSS pruning, 2:4 and 2:8 baselines, multi-GPU
+evaluation, MMLU and other tasks, and result summarization.
 
-### 3. Checkpoint
+```bash
+python3.11 -m venv .venv-accuracy
+source .venv-accuracy/bin/activate
+# Install a suitable CUDA-enabled PyTorch build on a GPU host first.
+python -m pip install -r evaluation/requirements-accuracy.txt
+python -m pytest evaluation/tests -q
+python evaluation/run_sparse_accuracy.py --help
+```
 
-- [ ] Export standard Hugging Face checkpoints with zeroed sparse weights.
-- [ ] Implement an HB-N:M format validator.
-- [x] Implement a SparseGEMM packer for nonzero weights and metadata.
-- [x] Add pack / unpack numerical consistency tests.
-- [x] Export Qwen1.5-MoE, DeepSeek-V2-Lite, Qwen3 MoE, and Llama 4 fused
-  expert checkpoints into one canonical SGLang SparseGEMM layout.
+The new accuracy pipeline is reconstructed from the experiment requirements,
+not recovered historical source. Its calibration and prompting policies are
+explicitly documented. CPU tests are not a full-model GPU accuracy validation,
+and no historical paper results are silently replaced.
 
-### 4. Kernel
+## Kernel and serving experiments
 
-- [x] Implement dense, contiguous-grouped, and masked-grouped Torch references in SparseGEMM.
-- [ ] Implement index-driven routed activation loading.
-- [ ] Implement gate-up, activation, and down computation stages.
-- [ ] Add hybrid warp specialization, TMA / `cp.async` pipelines, and autotuning.
-- [ ] Benchmark correctness, token distribution sensitivity, and expert load imbalance.
+These paths require Linux, Hopper GPUs, a compatible CUDA toolkit/driver,
+CUDA-enabled PyTorch, and the companion repositories. Follow the pinned
+[SparseGEMM build instructions](https://github.com/bwf02/SparseGEMM/blob/paper-dev/README.md)
+and [SGLang dependency declarations](https://github.com/bwf02/sglang/blob/paper-dev/python/pyproject.toml).
+Use separate environments for serving and accuracy; their dependency versions differ.
 
-### 5. End-to-End Integration
+- Kernel benchmark: `SparseGEMM/benchmarks/bench_moe_model_shapes.py`.
+- External baseline build: `SparseGEMM/baselines/moe_batch/README.md`.
+- Packed checkpoint export: `scripts/export_qwen15_moe_sparse_gemm.py --help`.
+  Use `--mask-source zeros` to preserve an already-pruned mask.
+- End-to-end experiments: `end2end/sglang/benchmark_paper_e2e.sh`.
+  Override `PYTHON_BIN`, model/export paths, TP sizes and GPU sets before running.
+- Serving summaries: `end2end/sglang/summarize_paper_e2e.py`.
 
-- [ ] Define an independent MosaicMoE runtime API.
-- [x] Integrate with the SGLang fused MoE backend.
-- [x] Implement a packed checkpoint loader and backend selection option.
-- [ ] Compare against native Triton, DeepGEMM, CUTLASS, FlashInfer, and SGLang MoE backends.
+Do not apply archived diagnostic or ablation patches indiscriminately. The
+pipeline-ablation prerequisite working tree has not been recovered; that
+patch is not part of this accuracy implementation.
+
+## Layout
+
+```text
+evaluation/        Pruning, accuracy runners, merge/summarize tools, tests
+mosaic_moe/        Sparse patterns, checkpoint export, runtime adapters
+scripts/           Checkpoint export utilities
+end2end/sglang/    Serving experiment drivers and summaries
+docs/              Design notes
+```
+
+## Licensing and acknowledgments
+
+The repository does not yet declare a top-level project license; select one
+before distributing it as an open-source release. Bundled third-party components
+retain their own licenses. Model weights and datasets must be obtained separately
+under their terms. LATTICE builds on DeepGEMM, SGLang, Wanda, SparseGPT, and NVIDIA
+CUDA libraries; preserve their notices and cite their work.

@@ -1,4 +1,6 @@
 .venv/
+.venv-*/
+data/
 models/
 results/
 __pycache__/

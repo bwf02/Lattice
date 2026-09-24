@@ -1,386 +1,249 @@
 #!/usr/bin/env python3
-"""Prune routed MoE experts and evaluate reasoning/code accuracy in memory."""
-
+"""Reconstructed routed-MoE accuracy workflow. See ACCURACY_REPRODUCTION.md."""
 import argparse
+from dataclasses import asdict
+import hashlib
+import importlib.metadata
+import inspect
 import json
-import os
-import subprocess
-import sys
-import tempfile
+import math
 from pathlib import Path
-from types import SimpleNamespace
+import sys
 
-import numpy as np
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
-
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-WANDA_DIR = ROOT_DIR / "evaluation" / "wanda"
-sys.path.insert(0, str(WANDA_DIR))
-
-from lib.prune import check_sparsity, prune_wanda  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from evaluation.accuracy_io import digest, partition, scores_from_tasks, write_json
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--dataset-root", default="/tmp/mosaicmoe-eval-datasets")
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--label", required=True)
-    parser.add_argument("--sparsity-type", default="dense")
-    parser.add_argument("--sparsity-ratio", type=float, default=0.0)
-    parser.add_argument("--prune-n", type=int, default=0, help="Weights pruned per M")
-    parser.add_argument("--prune-m", type=int, default=0)
-    parser.add_argument("--block-h", type=int, default=16)
-    parser.add_argument("--block-w", type=int, default=16)
-    parser.add_argument("--block-n", type=int, default=1)
-    parser.add_argument("--block-m", type=int, default=2)
-    parser.add_argument("--hybrid-block-score", default="sum")
-    parser.add_argument("--kept-pattern", default=None)
-    parser.add_argument("--nsamples", type=int, default=128)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--batch-size", default="auto")
-    parser.add_argument("--humaneval-batch-size", type=int, default=16)
-    parser.add_argument("--ppl-max-length", type=int, default=2048)
-    parser.add_argument("--ppl-max-tokens", type=int, default=None)
-    parser.add_argument("--ppl-only", action="store_true")
-    parser.add_argument("--skip-ppl", action="store_true")
-    parser.add_argument("--skip-humaneval", action="store_true")
-    parser.add_argument("--save-samples", action="store_true")
-    parser.add_argument("--limit", type=int, default=None)
-    return parser.parse_args()
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--model", required=True, help="Local checkpoint directory")
+    p.add_argument("--output", required=True)
+    p.add_argument("--label", required=True)
+    p.add_argument("--sparsity-type", choices=["dense", "hibnm", "hybrid_block_sparse", "unstructured", "2:4", "2:8"], default="dense")
+    p.add_argument("--sparsity-ratio", type=float)
+    p.add_argument("--prune-method", choices=["wanda", "magnitude"], default="wanda")
+    p.add_argument("--block-h", type=int, default=64)
+    p.add_argument("--block-w", type=int, default=64)
+    p.add_argument("--block-n", type=int, default=1)
+    p.add_argument("--block-m", type=int, default=2)
+    p.add_argument("--hybrid-block-score", choices=["sum", "squared_sum", "max_row_squared"], default="max_row_squared")
+    p.add_argument("--nsamples", type=int, default=32)
+    p.add_argument("--calibration-length", type=int, default=2048)
+    p.add_argument("--calibration-file", help="Train-only JSON/Parquet with a text column")
+    p.add_argument("--uncalibrated", choices=["error", "magnitude"], default="error")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], default="bfloat16")
+    p.add_argument("--device-map", default="auto")
+    p.add_argument("--trust-remote-code", action="store_true")
+    p.add_argument("--save-model")
+    p.add_argument("--prune-only", action="store_true")
+    p.add_argument("--skip-pruning", action="store_true")
+    p.add_argument("--tasks", nargs="+", choices=["gsm8k", "math500", "mmlu", "asdiv"], default=["gsm8k", "math500", "mmlu", "asdiv"])
+    p.add_argument("--task-config-dir", help="Optional lm-eval YAML task overrides (e.g. local datasets)")
+    p.add_argument("--batch-size", default="1")
+    p.add_argument("--num-shards", type=int, default=1)
+    p.add_argument("--shard-index", type=int, default=0)
+    p.add_argument("--limit", type=int, help="Global per-leaf-task smoke limit, before sharding")
+    p.add_argument("--save-samples", action="store_true")
+    p.add_argument("--ppl-file", help="Optional WikiText-2 test Parquet, text column")
+    p.add_argument("--ppl-max-length", type=int, default=2048)
+    args = p.parse_args(argv)
+    partition(0, args.shard_index, args.num_shards)
+    if args.limit is not None and args.limit < 1:
+        p.error("--limit must be positive")
+    if args.ppl_max_length < 2:
+        p.error("--ppl-max-length must be >= 2")
+    if args.prune_only and (not args.save_model or args.num_shards != 1):
+        p.error("--prune-only requires --save-model and a single process")
+    if args.num_shards > 1 and not args.skip_pruning and args.sparsity_type != "dense":
+        p.error("prune once, save, then use --skip-pruning on every evaluation shard")
+    if args.save_model and args.num_shards > 1:
+        p.error("evaluation shards must not write a shared checkpoint")
+    return args
 
 
-def load_local_task_configs(dataset_root):
-    import lm_eval
-    from lm_eval.utils import load_yaml_config
-
-    task_root = Path(lm_eval.__file__).parent / "tasks"
-    specs = [
-        (
-            "gsm8k",
-            task_root / "gsm8k" / "gsm8k.yaml",
-            "parquet",
-            {
-                "train": str(dataset_root / "gsm8k_data/main/train-00000-of-00001.parquet"),
-                "test": str(dataset_root / "gsm8k_data/main/test-00000-of-00001.parquet"),
-            },
-        ),
-        (
-            "minerva_math500",
-            task_root / "minerva_math" / "minerva_math500.yaml",
-            "json",
-            {"test": str(dataset_root / "math_500/test.jsonl")},
-        ),
-    ]
-    configs = []
-    for task_name, yaml_path, dataset_path, data_files in specs:
-        for data_file in data_files.values():
-            if not Path(data_file).is_file():
-                raise FileNotFoundError(data_file)
-        config = load_yaml_config(yaml_path=yaml_path)
-        config.update(
-            task=task_name,
-            dataset_path=dataset_path,
-            dataset_name=None,
-            dataset_kwargs={"data_files": data_files},
-        )
-        configs.append(config)
-    return configs
+def file_hash(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(8 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
-def metric_value(results, task, metric, filter_name=None):
-    task_results = results["results"][task]
-    matches = [
-        value
-        for key, value in task_results.items()
-        if key.split(",", 1)[0] == metric
-        and (filter_name is None or key.split(",", 1)[-1] == filter_name)
-    ]
-    if len(matches) != 1:
-        suffix = f" ({filter_name})" if filter_name else ""
-        raise KeyError(f"Expected one {metric}{suffix} metric for {task}, got {task_results}")
-    return float(matches[0])
+def checkpoint_files(path):
+    root = Path(path)
+    files = sorted(p for p in root.iterdir() if p.is_file() and
+                   (p.suffix in {".safetensors", ".bin", ".json", ".model", ".txt", ".jinja"})
+                   and p.name != "lattice_pruning.json")
+    if not (root / "config.json").is_file() or not any(p.suffix in {".bin", ".safetensors"} for p in files):
+        raise ValueError("--model must be a complete local HF checkpoint")
+    return {p.name: file_hash(p) for p in files}
 
 
-def run_python_test(source, timeout=5):
-    with tempfile.TemporaryDirectory(prefix="humaneval-") as directory:
-        path = Path(directory) / "candidate.py"
-        path.write_text(source)
-        try:
-            completed = subprocess.run(
-                [sys.executable, str(path)],
-                cwd=directory,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout,
-                check=False,
-            )
-            return completed.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
+def task_group(name):
+    if name.startswith("mmlu_"):
+        return "mmlu"
+    return {"minerva_math500": "math500"}.get(name, name)
 
 
-class StopOnText(StoppingCriteria):
-    def __init__(self, tokenizer, stop_sequences, prompt_length):
-        self.tokenizer = tokenizer
-        self.stop_sequences = stop_sequences
-        self.prompt_length = prompt_length
-
-    def __call__(self, input_ids, scores, **kwargs):
-        tail_start = max(self.prompt_length, input_ids.shape[1] - 16)
-        stopped = []
-        for row in input_ids:
-            tail = self.tokenizer.decode(row[tail_start:], skip_special_tokens=False)
-            stopped.append(any(stop in tail for stop in self.stop_sequences))
-        return torch.tensor(stopped, dtype=torch.bool, device=input_ids.device)
+def task_metric(group):
+    return {"gsm8k": "exact_match,strict-match", "math500": "math_verify,none",
+            "mmlu": "acc,none", "asdiv": "acc,none"}[group]
 
 
-def evaluate_wikitext2_ppl(model, tokenizer, dataset_root, max_length=2048, max_tokens=None):
+def evaluate_tasks(model, tokenizer, args):
+    from lm_eval import simple_evaluate
+    from lm_eval.models.huggingface import HFLM
+    from lm_eval.tasks import TaskManager, get_task_dict
+    if "samples" not in inspect.signature(simple_evaluate).parameters:
+        raise RuntimeError("lm-eval version lacks explicit sample-index selection")
+    names = ["minerva_math500" if t == "math500" else t for t in args.tasks]
+    tree = get_task_dict(names, task_manager=TaskManager(include_path=args.task_config_dir))
+    leaves = {}
+    def visit(branch):
+        for key, task in branch.items():
+            if isinstance(task, dict):
+                visit(task)
+            else:
+                if isinstance(task, tuple):
+                    task = task[-1]
+                leaves[str(task.config.task)] = task
+    visit(tree)
+    lm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=args.batch_size)
+    records, samples = {}, {}
+    for name, task in sorted(leaves.items()):
+        group = task_group(name)
+        metric = task_metric(group)
+        # Fix few-shot settings explicitly; never use test samples for few-shot context.
+        fewshot = 5 if group in {"gsm8k", "mmlu"} else 0
+        task.set_config("num_fewshot", fewshot)
+        if fewshot:
+            from lm_eval.api.samplers import FirstNSampler
+            fewshot_docs = list(task.fewshot_docs())
+            if len(fewshot_docs) < fewshot:
+                raise ValueError(f"{name}: insufficient few-shot examples")
+            task.sampler = FirstNSampler(fewshot_docs)
+        docs = task.eval_docs
+        total = min(len(docs), args.limit) if args.limit else len(docs)
+        ids = partition(total, args.shard_index, args.num_shards)
+        # Hash content, not just length; changed datasets must not merge silently.
+        dataset_digest = digest([docs[i] for i in range(total)])
+        config_digest = digest({"task": task.config.to_dict(),
+            "fewshot_policy": "first_n", "fewshot_examples": fewshot_docs[:fewshot] if fewshot else []})
+        score_sum = 0.
+        if ids:  # An empty samples list means ALL documents in some harness versions.
+            result = simple_evaluate(model=lm, tasks=[task], samples={name: ids},
+                bootstrap_iters=0, log_samples=True, random_seed=args.seed,
+                numpy_random_seed=args.seed, torch_random_seed=args.seed,
+                fewshot_random_seed=args.seed, confirm_run_unsafe_code=False)
+            observed = result["samples"][name]
+            if len(observed) != len(ids):
+                raise ValueError(f"{name}: evaluated sample count mismatch")
+            score = float(result["results"][name][metric])
+            if not math.isfinite(score) or not 0 <= score <= 1:
+                raise ValueError(f"{name}: invalid accuracy")
+            score_sum = score * len(ids)
+            if args.save_samples:
+                samples[name] = {"source_ids": ids, "harness_samples": observed}
+        records[name] = {"group": group, "metric": metric, "ids": ids,
+            "total": total, "count": len(ids), "sum": score_sum,
+            "dataset_digest": dataset_digest, "config_digest": config_digest}
+    if not records:
+        raise ValueError("no evaluation tasks resolved")
+    return records, samples
+
+
+def evaluate_ppl(model, tokenizer, args):
+    import torch
     from datasets import Dataset
-
-    path = dataset_root / "wikitext_salesforce/wikitext-2-raw-v1/test-00000-of-00001.parquet"
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    dataset = Dataset.from_parquet(str(path))
-    text = "\n\n".join(dataset["text"])
-    input_ids = tokenizer(text, return_tensors="pt").input_ids
-    if max_tokens is not None:
-        input_ids = input_ids[:, :max_tokens]
-
-    total_nll = 0.0
-    total_tokens = 0
-    for start in range(0, input_ids.shape[1], max_length):
-        window = input_ids[:, start : start + max_length].to(model.device)
-        if window.shape[1] < 2:
-            continue
-        with torch.inference_mode():
-            loss = model(window, labels=window).loss
-        predicted_tokens = window.shape[1] - 1
-        total_nll += float(loss) * predicted_tokens
-        total_tokens += predicted_tokens
-        print(
-            f"PPL tokens {min(start + max_length, input_ids.shape[1])}/{input_ids.shape[1]}",
-            flush=True,
-        )
-    return float(np.exp(total_nll / total_tokens)), total_tokens
-
-
-def evaluate_humaneval(
-    model, tokenizer, dataset_root, limit=None, batch_size=16, save_samples=False
-):
-    from datasets import Dataset
-
-    path = (
-        dataset_root
-        / "humaneval/openai_humaneval/test-00000-of-00001.parquet"
-    )
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    dataset = Dataset.from_parquet(str(path))
-    if limit is not None:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-
-    stop_sequences = ["\nclass", "\ndef", "\n#", "\nif", "\nprint"]
-    passed = 0
-    sample_records = []
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.padding_side = "left"
-    for batch_start in range(0, len(dataset), batch_size):
-        docs = [
-            dataset[index]
-            for index in range(batch_start, min(batch_start + batch_size, len(dataset)))
-        ]
-        inputs = tokenizer(
-            [doc["prompt"] for doc in docs], return_tensors="pt", padding=True
-        ).to(model.device)
-        with torch.inference_mode():
-            generated = model.generate(
-                **inputs,
-                do_sample=False,
-                max_new_tokens=1024,
-                pad_token_id=tokenizer.pad_token_id,
-                stopping_criteria=StoppingCriteriaList(
-                    [
-                        StopOnText(
-                            tokenizer, stop_sequences, inputs.input_ids.shape[1]
-                        )
-                    ]
-                ),
-            )
-        for offset, doc in enumerate(docs):
-            completion = tokenizer.decode(
-                generated[offset, inputs.input_ids.shape[1] :],
-                skip_special_tokens=True,
-            )
-            stop_positions = [
-                completion.find(stop) for stop in stop_sequences if stop in completion
-            ]
-            if stop_positions:
-                completion = completion[: min(stop_positions)]
-            source = (
-                doc["prompt"]
-                + completion
-                + "\n"
-                + doc["test"]
-                + f"\ncheck({doc['entry_point']})\n"
-            )
-            is_correct = run_python_test(source)
-            passed += int(is_correct)
-            index = batch_start + offset
-            print(f"HumanEval {index + 1}/{len(dataset)} passed={passed}", flush=True)
-            if save_samples:
-                sample_records.append(
-                    {
-                        "task_id": doc.get("task_id"),
-                        "prompt": doc["prompt"],
-                        "completion": completion,
-                        "entry_point": doc["entry_point"],
-                        "passed": is_correct,
-                    }
-                )
-    return passed / len(dataset), sample_records
+    data = Dataset.from_parquet(args.ppl_file)
+    ids = tokenizer("\n\n".join(data["text"]), return_tensors="pt").input_ids
+    windows = [ids[:, i:i + args.ppl_max_length] for i in range(0, ids.shape[1], args.ppl_max_length)]
+    windows = [w for w in windows if w.shape[1] > 1]
+    selected = partition(len(windows), args.shard_index, args.num_shards)
+    nll, tokens = 0., 0
+    device = model.get_input_embeddings().weight.device
+    with torch.inference_mode():
+        for index in selected:
+            window = windows[index].to(device)
+            predicted = window.shape[1] - 1
+            nll += float(model(window, labels=window).loss) * predicted
+            tokens += predicted
+    return {"nll": nll, "tokens": tokens, "value": math.exp(nll/tokens) if tokens else None,
+            "total_windows": len(windows), "ids": selected}
 
 
 def main():
     args = parse_args()
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype=torch.float16,
-        low_cpu_mem_usage=True,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model, use_fast=False, trust_remote_code=True
-    )
-    model.seqlen = min(model.config.max_position_embeddings, 2048)
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+    from evaluation.data import calibration_batches
+    from evaluation.pruning import Recipe, prune_model
+    set_seed(args.seed)
+    pattern = "hibnm" if args.sparsity_type == "hybrid_block_sparse" else args.sparsity_type
+    default_ratio = {"dense": 0., "2:4": .5, "2:8": .75, "unstructured": .25,
+                     "hibnm": args.block_n / (2 * args.block_m) if args.block_m else -1}[pattern]
+    recipe = Recipe(pattern, args.prune_method, args.sparsity_ratio if args.sparsity_ratio is not None else default_ratio,
+                    args.block_h, args.block_w, args.block_n, args.block_m, args.hybrid_block_score)
+    recipe.validate()
+    source_files = checkpoint_files(args.model)
+    manifest_path = Path(args.model) / "lattice_pruning.json"
+    manifest = None
+    if args.skip_pruning:
+        if not manifest_path.is_file():
+            raise ValueError("--skip-pruning requires a lattice_pruning.json export manifest")
+        manifest = json.loads(manifest_path.read_text())
+        if manifest["files"] != source_files:
+            raise ValueError("checkpoint content differs from pruning manifest")
+    elif manifest_path.exists() and pattern != "dense":
+        raise ValueError("checkpoint already pruned; use --skip-pruning to avoid double pruning")
+    elif manifest_path.exists():
+        raise ValueError("a pruned checkpoint cannot be evaluated as dense")
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
+    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=getattr(torch, args.dtype),
+        device_map=args.device_map, attn_implementation="eager", trust_remote_code=args.trust_remote_code)
+    if hasattr(model, "set_experts_implementation"):
+        model.set_experts_implementation("eager")
     model.eval()
-
-    if args.sparsity_type != "dense":
-        prune_args = SimpleNamespace(
-            sparsity_type=args.sparsity_type,
-            sparsity_ratio=args.sparsity_ratio,
-            prune_method="wanda",
-            routed_experts_only=True,
-            nsamples=args.nsamples,
-            seed=args.seed,
-            use_variant=False,
-            block_h=args.block_h,
-            block_w=args.block_w,
-            block_n=args.block_n,
-            block_m=args.block_m,
-            hybrid_block_score=args.hybrid_block_score,
-        )
-        prune_wanda(
-            prune_args,
-            model,
-            tokenizer,
-            torch.device("cuda:0"),
-            prune_n=args.prune_n,
-            prune_m=args.prune_m,
-        )
-
-    actual_sparsity = check_sparsity(model, routed_experts_only=True)
-
-    ppl = None
-    ppl_tokens = None
-    if not args.skip_ppl:
-        ppl, ppl_tokens = evaluate_wikitext2_ppl(
-            model,
-            tokenizer,
-            Path(args.dataset_root),
-            args.ppl_max_length,
-            args.ppl_max_tokens,
-        )
-
-    scores = {}
-    task_samples = {}
-    humaneval_samples = []
-    if not args.ppl_only:
-        from lm_eval import simple_evaluate
-        from lm_eval.models.huggingface import HFLM
-
-        task_configs = load_local_task_configs(Path(args.dataset_root))
-        lm = HFLM(
-            pretrained=model,
-            tokenizer=tokenizer,
-            batch_size=args.batch_size,
-            max_batch_size=64,
-        )
-        results = simple_evaluate(
-            model=lm,
-            tasks=task_configs,
-            limit=args.limit,
-            bootstrap_iters=0,
-            log_samples=args.save_samples,
-            confirm_run_unsafe_code=True,
-            random_seed=args.seed,
-            numpy_random_seed=args.seed,
-            torch_random_seed=args.seed,
-            fewshot_random_seed=args.seed,
-        )
-        scores = {
-            "gsm8k": metric_value(results, "gsm8k", "exact_match", "flexible-extract"),
-            "math500": metric_value(results, "minerva_math500", "math_verify"),
-        }
-        if not args.skip_humaneval:
-            humaneval, humaneval_samples = evaluate_humaneval(
-                model,
-                tokenizer,
-                Path(args.dataset_root),
-                args.limit,
-                args.humaneval_batch_size,
-                args.save_samples,
-            )
-            scores["humaneval"] = humaneval
-        scores["average"] = sum(scores.values()) / len(scores)
-        task_samples = results.get("samples", {})
-    output = {
-        "label": args.label,
-        "model": args.model,
-        "prune_method": "dense" if args.sparsity_type == "dense" else "wanda",
-        "scope": "routed_experts_only",
-        "sparsity_type": args.sparsity_type,
-        "target_sparsity": args.sparsity_ratio,
-        "actual_sparsity": actual_sparsity,
-        "kept_pattern": args.kept_pattern,
-        "prune_n": args.prune_n,
-        "prune_m": args.prune_m,
-        "block_h": args.block_h,
-        "block_w": args.block_w,
-        "block_n": args.block_n,
-        "block_m": args.block_m,
-        "hybrid_block_score": args.hybrid_block_score,
-        "nsamples": args.nsamples,
-        "seed": args.seed,
-        "batch_size": args.batch_size,
-        "humaneval_batch_size": args.humaneval_batch_size,
-        "ppl": ppl,
-        "ppl_tokens": ppl_tokens,
-        "ppl_max_length": args.ppl_max_length,
-        "scores": scores,
-    }
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
+    calibration_digest = hashlib.sha256()
+    def calibration():
+        batches = calibration_batches(tokenizer, samples=args.nsamples, length=args.calibration_length,
+            seed=args.seed, device=model.get_input_embeddings().weight.device, path=args.calibration_file)
+        for batch in batches:
+            calibration_digest.update(batch["input_ids"].cpu().numpy().tobytes())
+            yield batch
+    if not args.skip_pruning:
+        records = prune_model(model, recipe, calibration(), args.uncalibrated)
+        manifest = {"schema_version": 2, "recipe": asdict(recipe), "source_files": source_files,
+            "calibration": {"samples": args.nsamples, "length": args.calibration_length,
+                "seed": args.seed, "token_digest": calibration_digest.hexdigest(),
+                "uncalibrated": args.uncalibrated}, "projections": records}
+        if args.save_model:
+            target = Path(args.save_model)
+            if target.exists() and any(target.iterdir()):
+                raise ValueError("save directory must be empty; refusing to overwrite checkpoint")
+            model.save_pretrained(target, safe_serialization=True)
+            tokenizer.save_pretrained(target)
+            manifest["files"] = checkpoint_files(target)
+            write_json(target / "lattice_pruning.json", manifest)
+    if args.prune_only:
+        write_json(args.output, manifest)
+        return
+    versions = {p: importlib.metadata.version(p) for p in ("torch", "transformers", "lm_eval", "datasets")}
+    protocol = {"checkpoint_digest": digest(manifest), "dtype": args.dtype, "seed": args.seed,
+        "tasks": sorted(set(args.tasks)), "limit": args.limit, "versions": versions,
+        "batch_size": args.batch_size, "chat_template": False, "fewshot_policy": "first_n",
+        "ppl_digest": file_hash(args.ppl_file) if args.ppl_file else None,
+        "ppl_max_length": args.ppl_max_length}
+    tasks, samples = evaluate_tasks(model, tokenizer, args)
+    result = {"schema_version": 2, "label": args.label, "protocol": protocol,
+        "num_shards": args.num_shards, "shard_index": args.shard_index,
+        "pruning": manifest, "tasks": tasks, "scores": scores_from_tasks(tasks),
+        "ppl": evaluate_ppl(model, tokenizer, args) if args.ppl_file else None}
+    write_json(args.output, result)
     if args.save_samples:
-        samples_path = output_path.with_suffix(".samples.json")
-        samples_path.write_text(
-            json.dumps(
-                {"lm_eval": task_samples, "humaneval": humaneval_samples},
-                indent=2,
-                default=str,
-            )
-            + "\n"
-        )
-    print(json.dumps(output, indent=2, sort_keys=True))
+        write_json(Path(args.output).with_suffix(".samples.json"), samples)
+    print(json.dumps(result["scores"], indent=2))
 
 
 if __name__ == "__main__":

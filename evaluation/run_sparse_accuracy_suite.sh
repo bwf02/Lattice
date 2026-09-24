@@ -25,7 +25,7 @@ export WIKITEXT2_DATA_DIR="${DATASET_ROOT}/wikitext_salesforce/wikitext-2-raw-v1
 mkdir -p "$OUTPUT_DIR"
 
 common=(
-  "$ROOT_DIR/evaluation/run_sparse_accuracy.py"
+  "$ROOT_DIR/evaluation/run_sparse_accuracy_legacy.py"
   --model "$MODEL"
   --dataset-root "$DATASET_ROOT"
   --nsamples "$NSAMPLES"
