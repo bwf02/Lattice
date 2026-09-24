@@ -1,11 +1,11 @@
 # Project Structure
 
-MosaicMoE is organized as an independent sparse MoE toolchain rather than a
+LATTICE is organized as an independent sparse MoE toolchain rather than a
 serving-framework fork.
 
 ```text
-MosaicMoE/
-├── mosaic_moe/
+Lattice/
+├── lattice/
 │   ├── patterns/        # Sparse pattern semantics and validators
 │   ├── pruning/         # Pruning frontends and HF checkpoint export
 │   ├── weight_convert/  # Compatibility exports for SparseGEMM conversion
@@ -34,6 +34,6 @@ pattern definition
 ```
 
 The independent sibling repository `SparseGEMM` is the single owner of the
-kernel-facing hybrid sparse format. MosaicMoE owns pruning policy and
+kernel-facing hybrid sparse format. LATTICE owns pruning policy and
 evaluation, and imports conversion and computation APIs from the installed
 `sparse_gemm` Python package.

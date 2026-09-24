@@ -3,9 +3,9 @@ set -Eeuo pipefail
 
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/ossfs/workspace}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen1.5-MoE-A2.7B}"
-MODEL_DIR="${MODEL_DIR:-${WORKSPACE_ROOT}/MosaicMoE/models/Qwen1.5-MoE-A2.7B}"
-VENV_DIR="${VENV_DIR:-/tmp/mosaicmoe-accuracy-venv}"
-DATASET_ROOT="${DATASET_ROOT:-/tmp/mosaicmoe-eval-datasets}"
+MODEL_DIR="${MODEL_DIR:-${WORKSPACE_ROOT}/Lattice/models/Qwen1.5-MoE-A2.7B}"
+VENV_DIR="${VENV_DIR:-/tmp/lattice-accuracy-venv}"
+DATASET_ROOT="${DATASET_ROOT:-/tmp/lattice-eval-datasets}"
 UV_BOOTSTRAP_DIR="${UV_BOOTSTRAP_DIR:-/tmp/uv-bootstrap}"
 UV_INDEX_URL="${UV_INDEX_URL:-https://pypi.antfin-inc.com/simple/}"
 DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-0}"

@@ -241,7 +241,7 @@ def main() -> None:
                 "concurrency": row["concurrency"], "primary_metric": metric,
                 "deep_gemm": deep, "sparse_gemm": sparse, "slidesparse": value,
                 "slidesparse_over_deepgemm": deep / value if latency else value / deep,
-                "losparse_over_slidesparse": value / sparse if latency else sparse / value,
+                "lattice_over_slidesparse": value / sparse if latency else sparse / value,
                 "slidesparse_e2e_ms": row["mean_e2e_latency_ms_mean"],
                 "slidesparse_ttft_ms": row["mean_ttft_ms_mean"],
                 "slidesparse_itl_ms": row["mean_itl_ms_mean"],

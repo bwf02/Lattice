@@ -29,7 +29,7 @@ class ArchivedComparisonTest(unittest.TestCase):
             with (root / "slidesparse_comparisons.csv").open() as f:
                 row = next(csv.DictReader(f))
             self.assertEqual(float(row["slidesparse_over_deepgemm"]), 0.5)
-            self.assertEqual(float(row["losparse_over_slidesparse"]), 4.0)
+            self.assertEqual(float(row["lattice_over_slidesparse"]), 4.0)
             merge = [sys.executable, str(Path(__file__).with_name("merge_slidesparse_reference.py")),
                      str(reference), str(root / "merged.csv"), str(root)]
             subprocess.run(merge, check=True, capture_output=True)

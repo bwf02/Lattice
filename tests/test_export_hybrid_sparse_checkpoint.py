@@ -7,7 +7,7 @@ from unittest.mock import patch
 import torch
 from safetensors.torch import save_file
 
-from mosaic_moe.export.hybrid_sparse_checkpoint import (
+from lattice.export.hybrid_sparse_checkpoint import (
     ExportOptions,
     export_moe_hybrid_sparse,
     export_qwen15_moe_hybrid_sparse,
@@ -135,7 +135,7 @@ class TestExportHybridSparseCheckpoint(unittest.TestCase):
             self.assertEqual(manifest["weights"][0]["sparsity"], 0.25)
 
             with patch(
-                "mosaic_moe.export.hybrid_sparse_checkpoint._pack_and_save",
+                "lattice.export.hybrid_sparse_checkpoint._pack_and_save",
                 side_effect=AssertionError("existing layers must not be repacked"),
             ):
                 resumed_manifest_path = export_moe_hybrid_sparse(

@@ -1,7 +1,7 @@
 # Sparse Patterns
 
 This document briefly defines the sparse patterns currently implemented in
-MosaicMoE evaluation.
+LATTICE evaluation.
 
 ## HB-N:M
 

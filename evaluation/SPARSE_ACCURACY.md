@@ -26,7 +26,7 @@ bash evaluation/setup_sparse_accuracy.sh
 ```
 
 The default model is
-`/ossfs/workspace/MosaicMoE/models/Qwen1.5-MoE-A2.7B`. The Python environment,
+`/ossfs/workspace/Lattice/models/Qwen1.5-MoE-A2.7B`. The Python environment,
 datasets, logs, and results are stored under `/tmp`. Existing model files are
 reused and are not downloaded again.
 

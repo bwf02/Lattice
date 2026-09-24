@@ -44,7 +44,7 @@ sglang_commit=$(git -C "$SGLANG_DIR" rev-parse HEAD)
 sparse_gemm_commit=$(git -C "$SPARSE_GEMM_DIR" rev-parse HEAD)
 
 declare -A MODEL_DIRS=(
-  [qwen15]=/ossfs/workspace/MosaicMoE/models/Qwen1.5-MoE-A2.7B
+  [qwen15]=/ossfs/workspace/Lattice/models/Qwen1.5-MoE-A2.7B
   [deepseek_v2_lite]=/tmp/models/DeepSeek-V2-Lite
   [qwen3]=/tmp/models/Qwen3-30B-A3B
   [ernie45]=/tmp/models/ERNIE-4.5-21B-A3B-PT

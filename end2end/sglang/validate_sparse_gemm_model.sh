@@ -9,8 +9,8 @@ fi
 MODEL_DIR=$(cd "$1" && pwd)
 EXPORT_DIR=$2
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-MOSAIC_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
-WORKSPACE_DIR=$(cd "$MOSAIC_DIR/.." && pwd)
+LATTICE_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
+WORKSPACE_DIR=$(cd "$LATTICE_DIR/.." && pwd)
 SGLANG_DIR=${SGLANG_DIR:-$WORKSPACE_DIR/sglang}
 SPARSE_GEMM_DIR=${SPARSE_GEMM_DIR:-$WORKSPACE_DIR/SparseGEMM}
 PYTHON_BIN=${PYTHON_BIN:-/tmp/sglang-venv/bin/python}
@@ -36,7 +36,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
-export PYTHONPATH="$SGLANG_DIR/python:$SPARSE_GEMM_DIR:$MOSAIC_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$SGLANG_DIR/python:$SPARSE_GEMM_DIR:$LATTICE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ "$INCLUDE_SHARED_EXPERT" == auto ]]; then
   model_type=$(
@@ -60,7 +60,7 @@ if [[ "$INCLUDE_SHARED_EXPERT" != 0 && "$INCLUDE_SHARED_EXPERT" != 1 ]]; then
 fi
 
 export_args=(
-  "$MOSAIC_DIR/scripts/export_moe_sparse_gemm.py"
+  "$LATTICE_DIR/scripts/export_moe_sparse_gemm.py"
   --model-dir "$MODEL_DIR"
   --output-dir "$EXPORT_DIR"
   --no-download

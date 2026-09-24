@@ -6,7 +6,7 @@ WORKSPACE_ROOT=${WORKSPACE_ROOT:-$(dirname "$REPO_ROOT")}
 SGLANG_DIR=${SGLANG_DIR:-$WORKSPACE_ROOT/sglang}
 SPARSE_GEMM_DIR=${SPARSE_GEMM_DIR:-$WORKSPACE_ROOT/SparseGEMM}
 PYTHON_BIN=${PYTHON_BIN:-/tmp/sglang-venv/bin/python}
-RESULT_ROOT=${RESULT_ROOT:-/tmp/losparse-paper-e2e-$(date +%Y%m%d-%H%M%S)}
+RESULT_ROOT=${RESULT_ROOT:-/tmp/lattice-paper-e2e-$(date +%Y%m%d-%H%M%S)}
 MODEL_NAMES=${MODEL_NAMES:-qwen15 deepseek_v2_lite qwen3 llama4_scout}
 BACKENDS=${BACKENDS:-deep_gemm sparse_gemm}
 PROFILES=${PROFILES:-prefill decode mixed}
@@ -30,11 +30,11 @@ SPARSE_M_ALIGNMENT=${SPARSE_M_ALIGNMENT:-128}
 MOE_PREFILL_DUAL_STREAM=${MOE_PREFILL_DUAL_STREAM:-0}
 SGLANG_REVISION=${SGLANG_REVISION:-unknown}
 SPARSE_GEMM_REVISION=${SPARSE_GEMM_REVISION:-unknown}
-MOSAIC_MOE_REVISION=${MOSAIC_MOE_REVISION:-unknown}
+LATTICE_REVISION=${LATTICE_REVISION:-unknown}
 INVOCATION_ID=$(date +%Y%m%d-%H%M%S)
 
 declare -A MODEL_DIRS=(
-  [qwen15]=${QWEN15_MODEL_DIR:-/ossfs/workspace/MosaicMoE/models/Qwen1.5-MoE-A2.7B}
+  [qwen15]=${QWEN15_MODEL_DIR:-/ossfs/workspace/Lattice/models/Qwen1.5-MoE-A2.7B}
   [deepseek_v2_lite]=${DEEPSEEK_V2_LITE_MODEL_DIR:-/tmp/models/DeepSeek-V2-Lite}
   [qwen3]=${QWEN3_MODEL_DIR:-/tmp/models/Qwen3-30B-A3B}
   [llama4_scout]=${LLAMA4_SCOUT_MODEL_DIR:-/tmp/models/Llama-4-Scout-17B-16E-Instruct}
@@ -142,7 +142,7 @@ printf '%s\n' \
   "prefill_cuda_graph=disabled" \
   "sglang_revision=$SGLANG_REVISION" \
   "sparse_gemm_revision=$SPARSE_GEMM_REVISION" \
-  "mosaic_moe_revision=$MOSAIC_MOE_REVISION" \
+  "lattice_revision=$LATTICE_REVISION" \
   >"$RESULT_ROOT/metadata/invocation-${INVOCATION_ID}.txt"
 
 server_pid=

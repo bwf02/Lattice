@@ -2,11 +2,11 @@ import unittest
 
 import torch
 
-from mosaic_moe.patterns import (
+from lattice.patterns import (
     HybridBlockSparseConfig,
     build_hybrid_block_sparse_prune_mask,
 )
-from mosaic_moe.weight_convert import dense_to_hybrid_block_sparse
+from lattice.weight_convert import dense_to_hybrid_block_sparse
 from sparse_gemm.hybrid_sparse import hybrid_block_sparse_gemm_ref
 
 

@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from mosaic_moe.export.hybrid_sparse_checkpoint import (
+from lattice.export.hybrid_sparse_checkpoint import (
     ExportOptions,
     export_moe_hybrid_sparse,
     maybe_download_model,
@@ -29,13 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("/tmp/mosaic/models/Qwen1.5-MoE-A2.7B"),
+        default=Path("/tmp/lattice/models/Qwen1.5-MoE-A2.7B"),
         help="Local HF/ModelScope checkpoint directory.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("/tmp/mosaic/sgl_hybrid_sparse/qwen1_5_moe"),
+        default=Path("/tmp/lattice/sgl_hybrid_sparse/qwen1_5_moe"),
         help="Directory for SparseGEMM packed weights and manifest.json.",
     )
     parser.add_argument(

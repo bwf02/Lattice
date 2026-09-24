@@ -25,7 +25,7 @@ from lib.prune import check_sparsity, prune_wanda  # noqa: E402
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
-    parser.add_argument("--dataset-root", default="/tmp/mosaicmoe-eval-datasets")
+    parser.add_argument("--dataset-root", default="/tmp/lattice-eval-datasets")
     parser.add_argument("--output", required=True)
     parser.add_argument("--label", required=True)
     parser.add_argument("--sparsity-type", default="dense")

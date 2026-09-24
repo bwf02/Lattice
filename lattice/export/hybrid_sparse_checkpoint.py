@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 import torch
 
-from mosaic_moe.patterns import (
+from lattice.patterns import (
     HybridBlockSparseConfig,
     build_hybrid_block_sparse_prune_mask,
 )

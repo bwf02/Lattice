@@ -48,7 +48,7 @@ def main():
             **reference,
             "slidesparse": value,
             "slidesparse_speedup": deep / value if latency else value / deep,
-            "losparse_over_slidesparse": value / sparse if latency else sparse / value,
+            "lattice_over_slidesparse": value / sparse if latency else sparse / value,
             "slidesparse_e2e_ms": measured["mean_e2e_latency_ms_mean"],
             "slidesparse_ttft_ms": measured["mean_ttft_ms_mean"],
             "slidesparse_itl_ms": measured["mean_itl_ms_mean"],

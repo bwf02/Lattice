@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #   - `pip install -r requirements.txt` : add only eval extras (lm-eval, modelscope, ...)
 #     (uv pip resolves very slowly against the internal PyPI mirror here, so plain pip
 #      is used for the dependency step; it hits the same index and installs in seconds.)
-VENV_DIR="/tmp/mosaicmoe-eval-venv"
+VENV_DIR="/tmp/lattice-eval-venv"
 MODEL_ID="Qwen/Qwen1.5-MoE-A2.7B"
 MODEL_DIR="${ROOT_DIR}/models/Qwen1.5-MoE-A2.7B"
 OUTPUT_DIR="${ROOT_DIR}/results/Qwen1.5-MoE-A2.7B"
