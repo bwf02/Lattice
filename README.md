@@ -40,8 +40,8 @@ git clone --branch main https://github.com/bwf02/SparseGEMM.git
 git clone --branch main https://github.com/bwf02/sglang.git
 
 # Companion revisions used by these instructions.
-git -C SparseGEMM checkout 3b27d079d21e67732bce600776193c182d7de689
-git -C sglang checkout b4150ea6d49c415a535baad0495acbf91901e980
+git -C SparseGEMM checkout e494c411397d8aedd4ee733134cc8ceea9d28f7d
+git -C sglang checkout 33dc0d715d28fd1757649e3e95b5180c92291c08
 git -C SparseGEMM submodule update --init --recursive
 cd Lattice
 ```
@@ -66,7 +66,7 @@ licenses.
 Use separate environments for accuracy and serving. The pinned SGLang fork
 declares PyTorch 2.11.0 and CUDA-13-related dependencies; its driver/toolkit
 requirements must be satisfied independently of the accuracy environment.
-See its [dependency file](https://github.com/bwf02/sglang/blob/b4150ea6d49c415a535baad0495acbf91901e980/python/pyproject.toml)
+See its [dependency file](https://github.com/bwf02/sglang/blob/33dc0d715d28fd1757649e3e95b5180c92291c08/python/pyproject.toml)
 before selecting a GPU container.
 
 ### Accuracy environment

@@ -5,3 +5,7 @@ models/
 results/
 __pycache__/
 *.pyc
+
+# Local agent instructions (all directories)
+AGENT.md
+AGENTS.md
